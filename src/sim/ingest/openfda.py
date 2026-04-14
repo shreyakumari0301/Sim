@@ -125,8 +125,7 @@ def iter_openfda_pages(
     timeout = _httpx_timeout(settings)
     stack = _force_ipv4_socket() if settings.http_force_ipv4 else nullcontext()
     with stack:
-        # HTTP/1.1 only. Default curl negotiates HTTP/2 (ALPN h2); on some WSL paths the
-        # TLS handshake completes but the h2 stream never delivers bytes (curl: 0 received).
+        # HTTP/1.1 avoids HTTP/2 stalls on some WSL setups.
         with httpx.Client(
             timeout=timeout,
             follow_redirects=True,

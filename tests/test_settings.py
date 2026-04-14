@@ -16,6 +16,8 @@ def _clear_settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "OPEN_FDA_API_KEY",
         "NCBI_EUTILS_BASE",
         "NCBI_API_KEY",
+        "NCBI_TOOL",
+        "NCBI_EMAIL",
         "DATA_DIR",
         "LOG_LEVEL",
         "HTTP_MAX_RETRIES",
@@ -35,6 +37,8 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "eutils.ncbi.nlm.nih.gov" in str(s.ncbi_eutils_base)
     assert s.openfda_api_key is None
     assert s.ncbi_api_key is None
+    assert s.ncbi_tool == "sim_ingest"
+    assert s.ncbi_email is None
     assert s.log_level == "INFO"
 
 

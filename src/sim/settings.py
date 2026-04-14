@@ -10,6 +10,7 @@ from pydantic import AliasChoices, Field, HttpUrl, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+DrugbankAuthScheme = Literal["bearer", "x-api-key", "query", "none"]
 
 
 class Settings(BaseSettings):
@@ -37,6 +38,13 @@ class Settings(BaseSettings):
             description="Human-facing NCBI account / API key settings URL.",
         ),
     ] = "https://account.ncbi.nlm.nih.gov/settings/"  # type: ignore[assignment]
+    drugbank_site: Annotated[
+        HttpUrl,
+        Field(
+            validation_alias="DRUGBANK_SITE",
+            description="Human-facing DrugBank account / downloads URL.",
+        ),
+    ] = "https://go.drugbank.com/"  # type: ignore[assignment]
 
     openfda_api_base: Annotated[
         HttpUrl,
@@ -61,6 +69,52 @@ class Settings(BaseSettings):
         str | None,
         Field(default=None, validation_alias="NCBI_API_KEY", description="Optional NCBI API key."),
     ]
+
+    ncbi_tool: Annotated[
+        str,
+        Field(
+            validation_alias="NCBI_TOOL",
+            description="Identifying tool name for NCBI E-utilities (required by NCBI guidelines).",
+        ),
+    ] = "sim_ingest"
+
+    ncbi_email: Annotated[
+        str | None,
+        Field(
+            default=None,
+            validation_alias="NCBI_EMAIL",
+            description="Contact email for NCBI E-utilities (recommended).",
+        ),
+    ]
+    drugbank_download_url: Annotated[
+        str,
+        Field(
+            validation_alias="DRUGBANK_DOWNLOAD_URL",
+            description="DrugBank full-database XML download URL from your DrugBank account.",
+        ),
+    ] = "https://go.drugbank.com/releases/latest/downloads/all-full-database"
+    drugbank_api_key: Annotated[
+        str | None,
+        Field(
+            default=None,
+            validation_alias="DRUGBANK_API_KEY",
+            description="DrugBank API key/token used for authenticated download.",
+        ),
+    ]
+    drugbank_auth_scheme: Annotated[
+        DrugbankAuthScheme,
+        Field(
+            validation_alias="DRUGBANK_AUTH_SCHEME",
+            description="How to send DRUGBANK_API_KEY: bearer | x-api-key | query | none.",
+        ),
+    ] = "bearer"
+    drugbank_api_key_query_param: Annotated[
+        str,
+        Field(
+            validation_alias="DRUGBANK_API_KEY_QUERY_PARAM",
+            description="Query parameter name when DRUGBANK_AUTH_SCHEME=query.",
+        ),
+    ] = "api_key"
 
     data_dir: Annotated[
         Path,

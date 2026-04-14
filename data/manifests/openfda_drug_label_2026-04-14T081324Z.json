@@ -1,0 +1,15 @@
+{
+  "extra": {
+    "endpoint": "drug/label",
+    "limit_per_page": 1000,
+    "max_pages": 100000,
+    "search": null
+  },
+  "git_commit": null,
+  "manifest_version": "1",
+  "notes": "OpenFDA paginated download. | error: Client error '400 Bad Request' for url 'https://api.fda.gov/drug/label.json?limit=1000&api_key=iG728ofHtol0EGmh3stACN8qW1KikwqFeyqiqolu&skip=26000'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400",
+  "run_id": "63355267-a151-4d7d-9d6e-0a9ac9b5a48f",
+  "source": "openfda",
+  "started_at_utc": "2026-04-14T08:13:24Z",
+  "status": "failed"
+}

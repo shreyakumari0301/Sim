@@ -1,0 +1,23 @@
+{
+  "extra": {
+    "db": "pubmed",
+    "efetch_batch_size": 200,
+    "efetch_retmode": "text",
+    "efetch_rettype": "medline",
+    "jsonl_path": "/home/shreya/sim/data/raw/ncbi/pubmed/5a9f65ce-0993-48ca-8475-d531992dae5e/pages.jsonl",
+    "max_pages": 5,
+    "output_dir": "/home/shreya/sim/data/raw/ncbi/pubmed/5a9f65ce-0993-48ca-8475-d531992dae5e",
+    "pages_jsonl_sha256": "ee7ece9dff941bdf6bae047d560d75942e2529a4d72acaf5dc6dc13eb60f234f",
+    "pages_written": 2,
+    "retmax": 100,
+    "term": "YOUR_QUERY",
+    "total_ids_across_pages": 149
+  },
+  "git_commit": "94cb7ee",
+  "manifest_version": "1",
+  "notes": "NCBI Entrez esearch + efetch.",
+  "run_id": "5a9f65ce-0993-48ca-8475-d531992dae5e",
+  "source": "ncbi",
+  "started_at_utc": "2026-04-14T15:11:59Z",
+  "status": "completed"
+}

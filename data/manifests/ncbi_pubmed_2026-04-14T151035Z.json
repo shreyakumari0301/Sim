@@ -1,0 +1,23 @@
+{
+  "extra": {
+    "db": "pubmed",
+    "efetch_batch_size": 200,
+    "efetch_retmode": "text",
+    "efetch_rettype": "medline",
+    "jsonl_path": "/home/shreya/sim/data/raw/ncbi/pubmed/e2af04d2-5d5b-4982-bad1-6939533c7694/pages.jsonl",
+    "max_pages": 1,
+    "output_dir": "/home/shreya/sim/data/raw/ncbi/pubmed/e2af04d2-5d5b-4982-bad1-6939533c7694",
+    "pages_jsonl_sha256": "a0b86cbd8fbacb9d6f409b4a5dd72ecb970960ab6ccaf621db7a2b2b06e9e2eb",
+    "pages_written": 1,
+    "retmax": 20,
+    "term": "aspirin",
+    "total_ids_across_pages": 20
+  },
+  "git_commit": "94cb7ee",
+  "manifest_version": "1",
+  "notes": "NCBI Entrez esearch + efetch.",
+  "run_id": "e2af04d2-5d5b-4982-bad1-6939533c7694",
+  "source": "ncbi",
+  "started_at_utc": "2026-04-14T15:10:35Z",
+  "status": "completed"
+}

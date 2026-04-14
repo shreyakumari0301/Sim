@@ -18,6 +18,8 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "OPEN_FDA_API_KEY",
         "NCBI_EUTILS_BASE",
         "NCBI_API_KEY",
+        "NCBI_TOOL",
+        "NCBI_EMAIL",
         "DATA_DIR",
         "LOG_LEVEL",
         "HTTP_MAX_RETRIES",
