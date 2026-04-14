@@ -1,0 +1,12 @@
+# Copy relevant sections into:  C:\Users\<You>\.wslconfig   (Windows user profile root, NOT inside this repo)
+# Then from PowerShell (Admin not required):  wsl --shutdown
+# Wait a few seconds, reopen Ubuntu.
+
+# --- Mirrored networking (Windows 11 22H2+) ---
+# Makes WSL share the host network path more closely; often fixes HTTPS that works
+# in Windows curl.exe but stalls in WSL with "0 bytes received".
+[wsl2]
+networkingMode=mirrored
+# Optional: better DNS/VPN integration with mirrored mode
+# dnsTunneling=true
+# autoProxy=true

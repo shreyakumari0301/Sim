@@ -82,6 +82,34 @@ class Settings(BaseSettings):
         Field(validation_alias="HTTP_BACKOFF_BASE_SECONDS", gt=0),
     ] = 0.5
 
+    http_connect_timeout_seconds: Annotated[
+        float,
+        Field(
+            validation_alias="HTTP_CONNECT_TIMEOUT",
+            ge=1.0,
+            le=600.0,
+            description="TLS + TCP connect timeout for outbound HTTP (ingestion).",
+        ),
+    ] = 90.0
+
+    http_read_timeout_seconds: Annotated[
+        float,
+        Field(
+            validation_alias="HTTP_READ_TIMEOUT",
+            ge=1.0,
+            le=600.0,
+            description="Read timeout after a connection is established.",
+        ),
+    ] = 120.0
+
+    http_force_ipv4: Annotated[
+        bool,
+        Field(
+            validation_alias="HTTP_FORCE_IPV4",
+            description="Resolve DNS to IPv4 only during ingest (avoids slow/unreachable IPv6 on some WSL setups).",
+        ),
+    ] = False
+
     @field_validator("log_level", mode="before")
     @classmethod
     def normalize_log_level(cls, v: object) -> str:

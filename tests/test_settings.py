@@ -20,6 +20,9 @@ def _clear_settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "LOG_LEVEL",
         "HTTP_MAX_RETRIES",
         "HTTP_BACKOFF_BASE_SECONDS",
+        "HTTP_CONNECT_TIMEOUT",
+        "HTTP_READ_TIMEOUT",
+        "HTTP_FORCE_IPV4",
     ):
         monkeypatch.delenv(key, raising=False)
 
