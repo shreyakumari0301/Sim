@@ -109,12 +109,15 @@ def iter_openfda_pages(
     search: str | None,
     limit_per_page: int,
     max_pages: int,
+    initial_skip: int = 0,
 ) -> Iterator[dict[str, Any]]:
     """Yield full OpenFDA JSON objects, one per HTTP response (page)."""
     if limit_per_page < 1 or limit_per_page > 1000:
         raise ValueError("limit_per_page must be between 1 and 1000")
     if max_pages < 1:
         raise ValueError("max_pages must be at least 1")
+    if initial_skip < 0:
+        raise ValueError("initial_skip must be non-negative")
 
     params: dict[str, Any] = {"limit": limit_per_page}
     if search:
@@ -131,7 +134,7 @@ def iter_openfda_pages(
             follow_redirects=True,
             http2=False,
         ) as client:
-            skip = 0
+            skip = initial_skip
             for _ in range(max_pages):
                 page_params = {**params, "skip": skip}
                 url = _build_url(settings, endpoint, page_params)
@@ -151,6 +154,7 @@ def run_openfda_ingest(
     search: str | None,
     limit_per_page: int,
     max_pages: int,
+    initial_skip: int = 0,
 ) -> tuple[Path, Path]:
     """Write pages to JSONL under raw/openfda, write run manifest; return (jsonl_path, manifest_path)."""
     layout.ensure()
@@ -163,6 +167,7 @@ def run_openfda_ingest(
             "search": search,
             "limit_per_page": limit_per_page,
             "max_pages": max_pages,
+            "initial_skip": initial_skip,
         },
     )
 
@@ -183,6 +188,7 @@ def run_openfda_ingest(
                 search=search,
                 limit_per_page=limit_per_page,
                 max_pages=max_pages,
+                initial_skip=initial_skip,
             ):
                 f.write(json.dumps(page, ensure_ascii=False) + "\n")
                 pages_written += 1

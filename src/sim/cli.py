@@ -51,6 +51,7 @@ def _cmd_ingest_openfda(args: argparse.Namespace) -> int:
             search=(args.search or None),
             limit_per_page=args.limit_per_page,
             max_pages=args.max_pages,
+            initial_skip=args.skip,
         )
     except httpx.RequestError as e:
         print(
@@ -171,6 +172,14 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=1,
         help="Safety cap on pagination (default: 1).",
+    )
+    p_openfda.add_argument(
+        "--skip",
+        type=int,
+        default=0,
+        dest="skip",
+        metavar="N",
+        help="OpenFDA offset (records to skip before first page; use 1000 for the second 1000 rows with limit 1000).",
     )
     p_openfda.set_defaults(_fn=_cmd_ingest_openfda)
 
