@@ -1,0 +1,21 @@
+{
+  "extra": {
+    "endpoint": "drug/label",
+    "initial_skip": 1000,
+    "jsonl_path": "/home/shreya/sim/data/raw/openfda/drug_label/33c61f02-49ad-4f93-a4ec-a3ed5cb0cb7d/pages.jsonl",
+    "limit_per_page": 1000,
+    "max_pages": 1,
+    "output_dir": "/home/shreya/sim/data/raw/openfda/drug_label/33c61f02-49ad-4f93-a4ec-a3ed5cb0cb7d",
+    "pages_jsonl_sha256": "3b7c8cd5303ef89d3b0ff5f49ada5208a9829311cbb9f9ad0a93b94434e77d54",
+    "pages_written": 1,
+    "search": null,
+    "total_records_in_pages": 1000
+  },
+  "git_commit": "39fbffe",
+  "manifest_version": "1",
+  "notes": "OpenFDA paginated download.",
+  "run_id": "33c61f02-49ad-4f93-a4ec-a3ed5cb0cb7d",
+  "source": "openfda",
+  "started_at_utc": "2026-04-15T09:03:41Z",
+  "status": "completed"
+}
