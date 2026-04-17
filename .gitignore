@@ -12,4 +12,9 @@ build/
 *.egg-info/
 # data/raw/
 # data/processed/
-data/*
+data/manifests/*
+data/raw/*
+data/processed/ncbi_data.csv
+data/processed/drugbank.csv
+data/processed/openfda_v1.csv
+data/processed/openfda.pkl
