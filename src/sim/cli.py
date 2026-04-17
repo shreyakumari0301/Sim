@@ -68,22 +68,45 @@ def _cmd_ingest_openfda(args: argparse.Namespace) -> int:
 
 
 def _cmd_ingest_ncbi(args: argparse.Namespace) -> int:
-    from sim.ingest.ncbi import run_ncbi_ingest
+    from sim.ingest.ncbi import (
+        run_ncbi_extract,
+        run_ncbi_ingest,
+        run_ncbi_ingest_from_openfda,
+    )
 
     s = get_settings()
     layout = DataLayout.from_settings(s)
     try:
-        jsonl_path, manifest_path = run_ncbi_ingest(
-            s,
-            layout,
-            db=args.db,
-            term=args.term,
-            retmax=args.retmax,
-            max_pages=args.max_pages,
-            efetch_batch_size=args.efetch_batch_size,
-            efetch_rettype=(args.efetch_rettype or None),
-            efetch_retmode=args.efetch_retmode,
-        )
+        if args.openfda_csv:
+            jsonl_path, manifest_path = run_ncbi_ingest_from_openfda(
+                s,
+                layout,
+                db=args.db,
+                openfda_csv_path=Path(args.openfda_csv),
+                drug_column=args.drug_column,
+                start_year=args.start_year,
+                end_year=args.end_year,
+                retmax=args.retmax,
+                max_pages=args.max_pages,
+                efetch_batch_size=args.efetch_batch_size,
+                efetch_rettype=(args.efetch_rettype or None),
+                efetch_retmode=args.efetch_retmode,
+            )
+        else:
+            if not args.term:
+                print("`--term` is required unless `--openfda-csv` is provided.", file=sys.stderr)
+                return 2
+            jsonl_path, manifest_path = run_ncbi_ingest(
+                s,
+                layout,
+                db=args.db,
+                term=args.term,
+                retmax=args.retmax,
+                max_pages=args.max_pages,
+                efetch_batch_size=args.efetch_batch_size,
+                efetch_rettype=(args.efetch_rettype or None),
+                efetch_retmode=args.efetch_retmode,
+            )
     except httpx.RequestError as e:
         print(
             "NCBI E-utilities request failed (network). "
@@ -94,6 +117,29 @@ def _cmd_ingest_ncbi(args: argparse.Namespace) -> int:
         print(e, file=sys.stderr)
         return 1
     print(f"JSONL:    {jsonl_path}")
+    print(f"Manifest: {manifest_path}")
+    if args.also_extract:
+        records_path, extract_manifest = run_ncbi_extract(
+            layout,
+            jsonl_path,
+            out_name=args.extract_out_name,
+        )
+        print(f"Records:  {records_path}")
+        print(f"Extract manifest: {extract_manifest}")
+    return 0
+
+
+def _cmd_ingest_ncbi_extract(args: argparse.Namespace) -> int:
+    from sim.ingest.ncbi import run_ncbi_extract
+
+    s = get_settings()
+    layout = DataLayout.from_settings(s)
+    records_path, manifest_path = run_ncbi_extract(
+        layout,
+        Path(args.jsonl),
+        out_name=args.out_name,
+    )
+    print(f"Records:  {records_path}")
     print(f"Manifest: {manifest_path}")
     return 0
 
@@ -194,8 +240,39 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_ncbi.add_argument(
         "--term",
-        required=True,
-        help="Entrez query, e.g. aspirin[Title] AND review[PT].",
+        required=False,
+        help=(
+            "Full Entrez query for --db (any boolean mix; not limited to one substance). "
+            "PubMed examples: review[PT] AND 2020:2024[DP]; "
+            '(\"heart failure\"[TIAB] OR \"HF\"[TIAB]) AND randomized controlled trial[PT]; '
+            "COVID-19[MH] AND humans[mh]; "
+            "see NCBI Entrez query help for field tags and operators."
+        ),
+    )
+    p_ncbi.add_argument(
+        "--openfda-csv",
+        default=None,
+        help=(
+            "Optional path to processed OpenFDA CSV. If set, queries are built from each "
+            "`drug_name_clean` value."
+        ),
+    )
+    p_ncbi.add_argument(
+        "--drug-column",
+        default="drug_name_clean",
+        help="Column to read drug names from in --openfda-csv (default: drug_name_clean).",
+    )
+    p_ncbi.add_argument(
+        "--start-year",
+        type=int,
+        default=2020,
+        help="Publication date window start year for --openfda-csv mode (default: 2020).",
+    )
+    p_ncbi.add_argument(
+        "--end-year",
+        type=int,
+        default=2026,
+        help="Publication date window end year for --openfda-csv mode (default: 2026).",
     )
     p_ncbi.add_argument(
         "--retmax",
@@ -218,14 +295,43 @@ def main(argv: list[str] | None = None) -> int:
     p_ncbi.add_argument(
         "--efetch-rettype",
         default="medline",
-        help="efetch rettype (default: medline; use empty string for DB default).",
+        help=(
+            "efetch rettype (default: medline). "
+            "For PubMed XML, use --efetch-retmode xml and pass empty: --efetch-rettype \"\" ."
+        ),
     )
     p_ncbi.add_argument(
         "--efetch-retmode",
         default="text",
-        help="efetch retmode (default: text).",
+        help="efetch retmode: text (medline) or xml (PubMed XML; pair with empty --efetch-rettype).",
+    )
+    p_ncbi.add_argument(
+        "--also-extract",
+        action="store_true",
+        help="After ingest, write records.jsonl (structured articles) next to pages.jsonl.",
+    )
+    p_ncbi.add_argument(
+        "--extract-out-name",
+        default="records.jsonl",
+        help="Output filename when using --also-extract (default: records.jsonl).",
     )
     p_ncbi.set_defaults(_fn=_cmd_ingest_ncbi)
+
+    p_ncbi_extract = ingest_sub.add_parser(
+        "ncbi-extract",
+        help="Parse NCBI pages.jsonl efetch payloads into one record per article (JSONL).",
+    )
+    p_ncbi_extract.add_argument(
+        "--jsonl",
+        required=True,
+        help="Path to pages.jsonl from `sim ingest ncbi` (under data/raw/ncbi/...).",
+    )
+    p_ncbi_extract.add_argument(
+        "--out-name",
+        default="records.jsonl",
+        help="Output filename next to the input JSONL (default: records.jsonl).",
+    )
+    p_ncbi_extract.set_defaults(_fn=_cmd_ingest_ncbi_extract)
 
     p_drugbank_import = ingest_sub.add_parser(
         "drugbank-import",

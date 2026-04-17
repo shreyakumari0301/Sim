@@ -9,6 +9,9 @@ import pytest
 from sim.ingest.ncbi import (
     _efetch_url,
     _esearch_url,
+    parse_efetch_payload,
+    parse_pubmed_efetch_xml,
+    run_ncbi_extract,
     run_ncbi_ingest,
 )
 from sim.paths import DataLayout
@@ -128,3 +131,92 @@ def test_run_ncbi_ingest_writes_jsonl(tmp_path, monkeypatch: pytest.MonkeyPatch)
     man = manifest_path.read_text(encoding="utf-8")
     assert "completed" in man
     assert "ncbi" in man.lower()
+
+
+def test_parse_medline_extracts_fields() -> None:
+    text = """PMID- 12345678
+TI  - Example title
+AB  - First paragraph.
+FAU - Doe, Jane
+AU  - Doe J
+DP  - 2020 Jan 1
+"""
+    recs = parse_efetch_payload(text)
+    assert len(recs) == 1
+    r = recs[0]
+    assert r["pmid"] == "12345678"
+    assert r["title"] == "Example title"
+    assert r["abstract"] == "First paragraph."
+    assert "Doe, Jane" in r["authors"]
+    assert r["pub_date"] == "2020 Jan 1"
+    assert r["format"] == "medline"
+
+
+def test_parse_pubmed_xml_minimal() -> None:
+    xml = """<?xml version="1.0"?>
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation>
+      <PMID Version="1">999</PMID>
+      <Article>
+        <ArticleTitle>XML title</ArticleTitle>
+        <Abstract>
+          <AbstractText>Abstract body.</AbstractText>
+        </Abstract>
+        <AuthorList>
+          <Author>
+            <LastName>Smith</LastName>
+            <ForeName>Ann</ForeName>
+          </Author>
+        </AuthorList>
+        <Journal>
+          <Title>Test Journal</Title>
+          <JournalIssue>
+            <PubDate>
+              <Year>2021</Year>
+              <Month>Jun</Month>
+            </PubDate>
+          </JournalIssue>
+        </Journal>
+      </Article>
+    </MedlineCitation>
+  </PubmedArticle>
+</PubmedArticleSet>
+"""
+    recs = parse_pubmed_efetch_xml(xml)
+    assert len(recs) == 1
+    r = recs[0]
+    assert r["pmid"] == "999"
+    assert r["title"] == "XML title"
+    assert r["abstract"] == "Abstract body."
+    assert r["authors"] == ["Smith, Ann"]
+    assert r["journal"] == "Test Journal"
+    assert r["pub_date"] == "2021 Jun"
+    assert r["format"] == "pubmed_xml"
+
+
+def test_run_ncbi_extract_from_pages_jsonl(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+    s = Settings(_env_file=None)
+    layout = DataLayout.from_settings(s)
+    layout.ensure()
+
+    pages = tmp_path / "pages.jsonl"
+    page = {
+        "retstart": 0,
+        "ids": ["123"],
+        "esearch": {},
+        "efetch_responses": ["PMID- 123\nTI  - T\nAB  - A\n"],
+    }
+    pages.write_text(__import__("json").dumps(page) + "\n", encoding="utf-8")
+
+    out, man = run_ncbi_extract(layout, pages)
+    assert out.exists()
+    lines = out.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    row = __import__("json").loads(lines[0])
+    assert row["pmid"] == "123"
+    assert row["title"] == "T"
+    assert man.exists()
