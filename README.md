@@ -181,3 +181,23 @@ This keeps the repository suitable for collaboration without exceeding GitHub’
 ## 9. Document history
 
 This README summarizes the pipeline and the notebooks `data/processed/openfda.ipynb`, `data/processed/ncbi.ipynb`, and `data/processed/drugbank.ipynb` as they were used to build **`openfda_v1`**, **PubMed extracts**, and **DrugBank flattening** experiments. Exact row counts for your machine may differ slightly from the figures quoted above depending on ingest parameters and API results.
+
+---
+
+## 10. Clinical trial simulation engine (`clinical_sim/`)
+
+A separate, self-contained module implements a **multi-layer trial simulator** (mechanistic PK/PD → stochastic variation → policy/control), plus an **offline LLM rule compiler** with a token budget. Dependencies: `pip install -e ".[dev]"` (includes `numpy` and `openai`). Run phase tests:
+
+```bash
+pytest clinical_sim/tests -v
+```
+
+Example driver (reads your processed CSVs by drug name):
+
+```bash
+PYTHONPATH=clinical_sim python clinical_sim/main.py --drug silicea
+```
+
+Paths default to `data/processed/openfda_v1.csv`, `data/processed/ncbi_data.csv`, and `data/processed/drugbank.csv` (override with `--openfda-csv`, `--ncbi-csv`, `--drugbank-csv`). Text is built in `clinical_sim/csv_bundle.py`: **OpenFDA** rows match `drug_name_clean`; **NCBI** rows match `drug_name`; **DrugBank** rows match tokens in the `name` field. Pass `--llm` and `OPENAI_API_KEY` to call the API; otherwise rules stay in **dry-run** defaults.
+
+The simulation loop does **not** call the LLM; only `compile_rule_tables` does when `--llm` is set.
