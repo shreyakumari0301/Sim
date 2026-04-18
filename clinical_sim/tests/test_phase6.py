@@ -1,8 +1,10 @@
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from budget import TokenBudget
-from llm_compiler import compile_rule_tables
+from llm_compiler import _validate_llm_extraction, compile_rule_tables
 from rule_tables import RuleTable
 
 
@@ -46,3 +48,11 @@ def test_rule_table_to_dict_flat():
     d = rt.to_dict()
     assert "half_life" in d
     assert "non_response_day" in d["discontinuation_rules"]
+
+
+def test_weak_llm_extraction_raises(monkeypatch):
+    monkeypatch.setenv("LLM_MAX_NULL_FIELDS", "2")
+    bad = {f"k{i}": None for i in range(10)}
+    bad["source_summary"] = "ok"
+    with pytest.raises(ValueError, match="too weak"):
+        _validate_llm_extraction(bad, total_source_chars=1000)

@@ -1,5 +1,6 @@
 .env
 .env.local
+.sim_budget.json
 .venv/
 venv/
 __pycache__/

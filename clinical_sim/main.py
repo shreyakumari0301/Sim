@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from csv_bundle import build_text_bundle
-from llm_compiler import compile_rule_tables
+from llm_compiler import compile_rule_tables, load_repo_dotenv
 from loop import run_simulation
 from state import Patient, Treatment, WorldState
 
@@ -24,11 +24,13 @@ def _default_processed(name: str) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_repo_dotenv()
+
     p = argparse.ArgumentParser(description="Clinical sim: CSV → LLM rules → run_simulation")
     p.add_argument(
         "--drug",
         default="silicea",
-        help="Match drug_name_clean (OpenFDA), drug_name (NCBI CSV), and DrugBank name tokens.",
+        help="Exact match (case-insensitive) on NCBI drug_name, OpenFDA drug_name_clean, DrugBank name tokens.",
     )
     p.add_argument(
         "--openfda-csv",
@@ -51,7 +53,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--llm",
         action="store_true",
-        help="Call OpenAI (needs OPENAI_API_KEY). Default is dry-run rules.",
+        help="Call LLM (OPENAI_API_KEY in env or .env). Use OPENAI_BASE_URL for OpenRouter. Default: dry-run.",
+    )
+    p.add_argument(
+        "--no-show-llm-output",
+        action="store_true",
+        help="With --llm, do not print the model JSON and merged RuleTable (default is to show).",
     )
     p.add_argument("--timesteps", type=int, default=90, help="Simulation length")
     args = p.parse_args(argv)
@@ -87,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
         openfda_text,
         drugbank_text,
         dry_run=dry_run,
+        drug=args.drug,
+        show_llm_output=args.llm and not dry_run and not args.no_show_llm_output,
     )
 
     print(f"\nRules: v{rules.version} — {rules.source_summary!r}")

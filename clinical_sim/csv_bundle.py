@@ -8,13 +8,15 @@ Column contracts (your exports):
 - **drugbank.csv**: drug_id, secondary_ids, name, type, description, indication, state, cas, status,
   targets, interactions
 
-Matching: drug_name (NCBI), drug_name_clean (OpenFDA), DrugBank `name` tokens (comma/semicolon) or substring.
+Matching: **exact** normalized equality on ``drug_name`` (NCBI), ``drug_name_clean`` (OpenFDA), and
+DrugBank ``name`` split on comma/semicolon (**no substring** match — avoids nitroaspirin-style noise).
 Truncation before the LLM is applied again inside `compile_rule_tables`.
 """
 
 from __future__ import annotations
 
 import csv
+import os
 import re
 from pathlib import Path
 
@@ -119,6 +121,25 @@ OPENFDA_COLUMNS = (
     "drug_name_clean",
 )
 
+# High-signal OpenFDA columns for LLM (smaller blob; override with OPENFDA_PRIORITY_ONLY=0 for full row)
+OPENFDA_PRIORITY_COLUMNS = (
+    "warnings",
+    "mechanism_of_action",
+    "indications_and_usage",
+    "dosage_and_administration",
+    "adverse_reactions",
+    "contraindications",
+    "drug_interactions",
+    "pregnancy_or_breast_feeding",
+    "boxed_warning",
+    "dosage_forms_and_strengths",
+    "warnings_and_cautions",
+    "clinical_pharmacology",
+    "pharmacokinetics",
+    "description",
+    "drug_name_clean",
+)
+
 # DrugBank export columns (order preserved in output text)
 DRUGBANK_COLUMNS = (
     "drug_id",
@@ -143,6 +164,23 @@ def _split_drugbank_names(name: str) -> set[str]:
     return {_norm(p) for p in re.split(r"[,;]", str(name)) if p.strip()}
 
 
+# DrugBank often lists INN (e.g. acetylsalicylic acid) without the common name in tokens.
+_DRUGBANK_EQUIVALENTS: dict[str, frozenset[str]] = {
+    "aspirin": frozenset({"acetylsalicylic acid", "asa"}),
+}
+
+
+def _drugbank_match_tokens(drug: str) -> set[str]:
+    """Normalized names/tokens that should match the same row as ``drug`` (exact, no substring)."""
+    d = _norm(drug)
+    s: set[str] = {d}
+    for k, syns in _DRUGBANK_EQUIVALENTS.items():
+        if d == k or d in syns:
+            s.add(k)
+            s |= syns
+    return s
+
+
 def _row_get(row: dict[str, str], key: str) -> str:
     v = row.get(key)
     if v is None:
@@ -162,13 +200,18 @@ def pubmed_text_for_drug(
     ncbi_csv: Path,
     drug: str,
     *,
-    max_rows: int = 80,
+    max_rows: int | None = None,
     max_chars: int = 24_000,
 ) -> str:
-    """Build PubMed context from ncbi_data.csv (pmid … drug_name)."""
+    """Build PubMed context from ncbi_data.csv (exact ``drug_name`` match per row)."""
     if not ncbi_csv.is_file():
         return ""
 
+    if max_rows is None:
+        try:
+            max_rows = int(os.environ.get("PUBMED_MAX_ROWS", "3"))
+        except ValueError:
+            max_rows = 3
     drug_n = _norm(drug)
     chunks: list[str] = []
     n = 0
@@ -194,19 +237,33 @@ def pubmed_text_for_drug(
     return "\n\n---\n\n".join(chunks)[:max_chars]
 
 
-def openfda_text_for_drug(openfda_csv: Path, drug: str, *, max_chars: int = 24_000) -> str:
-    """Join all OpenFDA v1 columns for the first row where drug_name_clean matches."""
+def openfda_text_for_drug(
+    openfda_csv: Path,
+    drug: str,
+    *,
+    max_chars: int = 24_000,
+    priority_only: bool | None = None,
+) -> str:
+    """Join OpenFDA columns for the first row where ``drug_name_clean`` matches exactly."""
     if not openfda_csv.is_file():
         return ""
 
+    if priority_only is None:
+        priority_only = os.environ.get("OPENFDA_PRIORITY_ONLY", "1").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+
     drug_n = _norm(drug)
+    cols = OPENFDA_PRIORITY_COLUMNS if priority_only else OPENFDA_COLUMNS
     with openfda_csv.open(encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
             if _norm(_row_get(row, "drug_name_clean")) != drug_n:
                 continue
             parts: list[str] = []
-            for col in OPENFDA_COLUMNS:
+            for col in cols:
                 val = _row_get(row, col)
                 if not _is_empty_cell(val):
                     parts.append(f"{col}: {val}")
@@ -216,11 +273,11 @@ def openfda_text_for_drug(openfda_csv: Path, drug: str, *, max_chars: int = 24_0
 
 
 def drugbank_text_for_drug(drugbank_csv: Path, drug: str, *, max_chars: int = 24_000) -> str:
-    """Join all DrugBank columns for the first row whose name matches this drug."""
+    """Join DrugBank columns for the first row whose ``name`` matches this drug (exact token or full name)."""
     if not drugbank_csv.is_file():
         return ""
 
-    drug_n = _norm(drug)
+    query = _drugbank_match_tokens(drug)
     with drugbank_csv.open(encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -228,7 +285,8 @@ def drugbank_text_for_drug(drugbank_csv: Path, drug: str, *, max_chars: int = 24
             if not name:
                 continue
             aliases = _split_drugbank_names(name)
-            if drug_n not in aliases and drug_n not in _norm(name):
+            full = _norm(name)
+            if not aliases.intersection(query) and full not in query:
                 continue
             parts: list[str] = []
             for col in DRUGBANK_COLUMNS:
@@ -246,9 +304,11 @@ def build_text_bundle(
     openfda_csv: Path,
     ncbi_csv: Path,
     drugbank_csv: Path,
+    pubmed_max_rows: int | None = None,
+    openfda_priority_only: bool | None = None,
 ) -> tuple[str, str, str]:
     """Return (pubmed_text, openfda_text, drugbank_text) for `compile_rule_tables`."""
-    pubmed = pubmed_text_for_drug(ncbi_csv, drug)
-    openfda = openfda_text_for_drug(openfda_csv, drug)
+    pubmed = pubmed_text_for_drug(ncbi_csv, drug, max_rows=pubmed_max_rows)
+    openfda = openfda_text_for_drug(openfda_csv, drug, priority_only=openfda_priority_only)
     drugbank = drugbank_text_for_drug(drugbank_csv, drug)
     return pubmed, openfda, drugbank

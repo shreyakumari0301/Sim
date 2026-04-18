@@ -11,8 +11,8 @@ BUDGET_FILE = Path(".sim_budget.json")
 
 DEFAULT_BUDGET: dict[str, Any] = {
     "daily_token_limit": 50_000,
-    "per_call_max_tokens": 2_000,
-    "min_call_interval_s": 300,
+    "per_call_max_tokens": 6_000,
+    "min_call_interval_s": 0,
     "used_today": 0,
     "last_call_ts": 0.0,
     "last_reset_date": "",
@@ -102,3 +102,10 @@ class TokenBudget:
             if k in self._state:
                 self._state[k] = v
         self._save()
+
+    def ensure_min_per_call_tokens(self, minimum: int | None = None) -> None:
+        """Raise ``per_call_max_tokens`` if the saved file is below ``minimum`` (default: current default)."""
+        floor = DEFAULT_BUDGET["per_call_max_tokens"] if minimum is None else minimum
+        cur = int(self._state.get("per_call_max_tokens", floor))
+        if cur < floor:
+            self.configure(per_call_max_tokens=floor)

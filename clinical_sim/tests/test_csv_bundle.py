@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from csv_bundle import build_text_bundle
+from csv_bundle import build_text_bundle, drugbank_text_for_drug
 
 
 def test_build_text_bundle_matches_drug(tmp_path: Path) -> None:
@@ -32,3 +32,15 @@ def test_build_text_bundle_matches_drug(tmp_path: Path) -> None:
     assert "Aspirin study" in p and "Smith J" in p
     assert "COX inhibition" in o
     assert "DB00945" in d and "BTD1" in d and "50-78-2" in d
+
+
+def test_drugbank_aspirin_matches_inn_only(tmp_path: Path) -> None:
+    """INN-only row (acetylsalicylic acid) matches query ``aspirin`` via synonyms."""
+    db = tmp_path / "drugbank.csv"
+    db.write_text(
+        "drug_id,secondary_ids,name,type,description,indication,state,cas,status,targets,interactions\n"
+        "DB1,,Acetylsalicylic acid,small molecule,,,,,,,\n",
+        encoding="utf-8",
+    )
+    text = drugbank_text_for_drug(db, "aspirin")
+    assert "DB1" in text and "Acetylsalicylic acid" in text

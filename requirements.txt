@@ -1,0 +1,8 @@
+package,version_constraint,groups
+httpx,>=0.27,main
+pydantic,>=2.6,main
+pydantic-settings,>=2.2,main
+numpy,>=1.26,dev;clinical-sim
+openai,>=1.0,dev;clinical-sim
+pytest,>=8.0,dev
+ruff,>=0.4,dev
