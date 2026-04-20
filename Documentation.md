@@ -96,6 +96,15 @@ This project successfully implements a complete foundation for evidence-driven c
 ### A. LLM output format (strict JSON contract)
 The rule compiler (`clinical_sim/llm_compiler.py`) expects one JSON object that maps to the `RuleTable` fields used by the simulator. The model output is parsed, validated, then merged into defaults for any missing fields.
 
+How the LLM works internally (runtime flow):
+1) `build_text_bundle` collects drug-scoped text from PubMed, OpenFDA, and DrugBank.
+2) Source text is trimmed by `LLM_*_CHARS` (or `LLM_TOTAL_SOURCE_CHARS`) before prompting.
+3) `compile_rule_tables` sends a strict JSON-only prompt to the model.
+4) The raw response is JSON-parsed; weak extraction is measured by null-field count.
+5) If extraction is weak and strict mode is active, one automatic retry runs with larger context.
+6) Drug-specific priors/guardrails are applied (including metformin sparse-profile fallback).
+7) Final values are validated as `RuleTable`, versioned, and passed into simulation.
+
 Expected JSON shape:
 ```json
 {
