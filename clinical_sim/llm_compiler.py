@@ -150,6 +150,12 @@ def _grounding_block(drug: str) -> str:
         "- NSAIDs: tox_rate 0.01-0.05 (moderate).\n"
         "- Oncology drugs: tox_rate 0.1-0.3 (high).\n"
         "- Widely used first-line therapies should bias toward lower toxicity.\n"
+        "CALIBRATION CONSTRAINTS:\n"
+        "- Aim for realistic activation behavior; weak/metabolic drugs should use lower response thresholds.\n"
+        "- weak drugs: response_threshold 0.02-0.08; strong drugs: 0.1-0.3.\n"
+        "- Keep tolerance_rate low (<0.005) unless strong evidence.\n"
+        "- Keep noise_sd <= 0.05 and receptor_recovery <= 0.1.\n"
+        "- Keep internal consistency: low tox_rate should align with low ae_probability.\n"
     )
 
 
@@ -210,16 +216,33 @@ def _metformin_profile_defaults() -> dict[str, Any]:
     """Drug-sensitive fallback profile for metformin-like antihyperglycemics."""
     return {
         "half_life": 6.0,
-        "kd": 10.0,
-        "emax": 0.65,
-        "pathway_suppression": 0.7,
-        "tox_rate": 0.005,
+        "kd": 80.0,
+        "emax": 0.35,
+        "pathway_suppression": 0.4,
+        "tox_rate": 0.002,
         "ae_probability": 0.03,
+        "tolerance_rate": 0.001,
+        "tolerance_threshold": 300.0,
+        "receptor_recovery": 0.02,
+        "rebound_magnitude": 0.15,
+        "rebound_decay": 0.1,
+        "biomarker_sensitivity": 0.8,
         "hill_n": 1.2,
         "max_dose": 2000.0,
         "dose_step": 500.0,
-        "response_threshold": 0.05,
+        "response_threshold": 0.04,
+        "response_rate_alpha": 2.5,
+        "response_rate_beta": 1.5,
+        "ae_severity_weights": [0.6, 0.25, 0.1, 0.04, 0.01],
+        "noise_sd": 0.02,
         "tox_halt_grade": 3,
+        "escalation_threshold": 0.3,
+        "escalation_day": 14,
+        "response_eval_day": 45,
+        "de_escalation_grade": 2,
+        "non_response_day": 60,
+        "non_response_cutoff": 0.15,
+        "grade4_auto_stop": False,
     }
 
 
@@ -248,6 +271,31 @@ def _maybe_apply_drug_profile_fallback(parsed: dict[str, Any], *, drug: str) -> 
         if parsed.get(k) is None:
             parsed[k] = v
     return True
+
+
+def _apply_calibration_guardrails(parsed: dict[str, Any]) -> None:
+    """Clamp unstable outputs into clinically plausible operating ranges."""
+    tol = parsed.get("tolerance_rate")
+    if isinstance(tol, (int, float)):
+        parsed["tolerance_rate"] = min(float(tol), 0.005)
+
+    noise = parsed.get("noise_sd")
+    if isinstance(noise, (int, float)):
+        parsed["noise_sd"] = min(float(noise), 0.05)
+
+    rec = parsed.get("receptor_recovery")
+    if isinstance(rec, (int, float)):
+        parsed["receptor_recovery"] = min(float(rec), 0.1)
+
+    emax = parsed.get("emax")
+    thr = parsed.get("response_threshold")
+    if isinstance(emax, (int, float)) and isinstance(thr, (int, float)) and float(emax) < 0.5:
+        parsed["response_threshold"] = min(float(thr), 0.08)
+
+    tox = parsed.get("tox_rate")
+    ae = parsed.get("ae_probability")
+    if isinstance(tox, (int, float)) and isinstance(ae, (int, float)) and float(tox) <= 0.01:
+        parsed["ae_probability"] = min(float(ae), 0.08)
 
 
 def compile_rule_tables(
@@ -364,6 +412,7 @@ Schema (same keys, JSON values): {PARAM_SCHEMA}
             openfda_text=openfda_text,
             drugbank_text=drugbank_text,
         )
+    _apply_calibration_guardrails(parsed)
     null_n = _count_null_fields(parsed)
     total_fields = len(RuleTable.model_fields) - 1  # exclude discontinuation_rules (nested)
     confidence = max(0.0, min(1.0, 1.0 - (null_n / float(total_fields))))

@@ -19,7 +19,7 @@ def test_metformin_profile_fallback_applies_on_sparse_extraction() -> None:
     assert _count_null_fields(parsed) > 10
     applied = _maybe_apply_drug_profile_fallback(parsed, drug="metformin")
     assert applied is True
-    assert parsed["tox_rate"] == 0.005
+    assert parsed["tox_rate"] == 0.002
     assert parsed["max_dose"] == 2000.0
     assert parsed["tox_halt_grade"] == 3
 
