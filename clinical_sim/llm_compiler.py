@@ -85,6 +85,12 @@ def _trim_sources(pubmed_text: str, openfda_text: str, drugbank_text: str) -> tu
     return pubmed_text[:pm], openfda_text[:of], drugbank_text[:db]
 
 
+def llm_prompt_char_counts(pubmed_text: str, openfda_text: str, drugbank_text: str) -> tuple[int, int, int]:
+    """Lengths actually sent to the model after ``LLM_*_CHARS`` / ``LLM_TOTAL_SOURCE_CHARS`` trimming."""
+    pm, of, db = _trim_sources(pubmed_text, openfda_text, drugbank_text)
+    return len(pm), len(of), len(db)
+
+
 def _count_null_fields(parsed: dict[str, Any]) -> int:
     """Count null values except ``source_summary`` (allowed to be sparse)."""
     skip = {"source_summary"}
@@ -132,7 +138,7 @@ def compile_rule_tables(
     drug: str | None = None,
     budget_file: Path | None = None,
     show_llm_output: bool = False,
-    reject_weak_extraction: bool = True,
+    reject_weak_extraction: bool = False,
 ) -> RuleTable:
     """
     Call the LLM to extract rule_tables from raw data.
@@ -140,7 +146,9 @@ def compile_rule_tables(
 
     ``budget_file`` — optional path for TokenBudget state (tests use a temp file).
     ``show_llm_output`` — when True and not dry_run, print raw model JSON and merged RuleTable.
-    ``drug`` — grounds the prompt (recommended). ``reject_weak_extraction`` — raise if too many nulls.
+    ``drug`` — grounds the prompt (recommended).
+    ``reject_weak_extraction`` — if True, raise when the model returns too many JSON nulls (strict QC).
+        Default False: always merge non-null fields into defaults (extractor + fallback), like earlier behavior.
     """
     if dry_run:
         return RuleTable(version="dry_run", source_summary="dry run — no API call")
@@ -220,10 +228,15 @@ Schema (same keys, JSON values): {PARAM_SCHEMA}
     except json.JSONDecodeError as e:
         raise ValueError(f"LLM returned invalid JSON: {e}\nRaw: {raw[:300]}") from e
 
+    src_total = len(pubmed_text) + len(openfda_text) + len(drugbank_text)
+    null_n = _count_null_fields(parsed)
     if reject_weak_extraction:
-        _validate_llm_extraction(
-            parsed,
-            total_source_chars=len(pubmed_text) + len(openfda_text) + len(drugbank_text),
+        _validate_llm_extraction(parsed, total_source_chars=src_total)
+    elif null_n > int(os.environ.get("LLM_WARN_NULL_FIELDS", "15")):
+        print(
+            f"  Note: LLM returned {null_n} null fields (merge uses defaults for those). "
+            f"Use --strict-llm or LLM_MAX_NULL_FIELDS to enforce, or increase context (LLM_PUBMED_CHARS, …).",
+            file=sys.stderr,
         )
 
     rules = _build_rule_table(parsed, prior_version, budget)

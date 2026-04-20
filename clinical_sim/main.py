@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from csv_bundle import build_text_bundle
-from llm_compiler import compile_rule_tables, load_repo_dotenv
+from llm_compiler import compile_rule_tables, llm_prompt_char_counts, load_repo_dotenv
 from loop import run_simulation
 from state import Patient, Treatment, WorldState
 
@@ -51,6 +51,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to drugbank.csv",
     )
     p.add_argument(
+        "--drugbank-id",
+        default=None,
+        metavar="DBxxxxx",
+        help="Optional DrugBank drug_id for this run (overrides name match). Same as env DRUGBANK_ID.",
+    )
+    p.add_argument(
         "--llm",
         action="store_true",
         help="Call LLM (OPENAI_API_KEY in env or .env). Use OPENAI_BASE_URL for OpenRouter. Default: dry-run.",
@@ -60,6 +66,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="With --llm, do not print the model JSON and merged RuleTable (default is to show).",
     )
+    p.add_argument(
+        "--strict-llm",
+        action="store_true",
+        help="Fail if the model returns too many JSON nulls (LLM_MAX_NULL_FIELDS). Default: merge with defaults.",
+    )
     p.add_argument("--timesteps", type=int, default=90, help="Simulation length")
     args = p.parse_args(argv)
 
@@ -68,12 +79,19 @@ def main(argv: list[str] | None = None) -> int:
         openfda_csv=args.openfda_csv,
         ncbi_csv=args.ncbi_csv,
         drugbank_csv=args.drugbank_csv,
+        drugbank_id=args.drugbank_id,
     )
 
     print(f"Drug: {args.drug!r}")
     print(f"  PubMed blob length:   {len(pubmed_text)} chars (from {args.ncbi_csv})")
     print(f"  OpenFDA blob length:  {len(openfda_text)} chars (from {args.openfda_csv})")
     print(f"  DrugBank blob length: {len(drugbank_text)} chars (from {args.drugbank_csv})")
+    if args.llm:
+        lp, lo, ld = llm_prompt_char_counts(pubmed_text, openfda_text, drugbank_text)
+        print(
+            f"  LLM sees (trimmed):   PubMed {lp} + OpenFDA {lo} + DrugBank {ld} chars "
+            f"(set LLM_*_CHARS / LLM_TOTAL_SOURCE_CHARS to send more)"
+        )
 
     if not pubmed_text and args.ncbi_csv.is_file():
         print(
@@ -96,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         dry_run=dry_run,
         drug=args.drug,
         show_llm_output=args.llm and not dry_run and not args.no_show_llm_output,
+        reject_weak_extraction=args.strict_llm,
     )
 
     print(f"\nRules: v{rules.version} — {rules.source_summary!r}")

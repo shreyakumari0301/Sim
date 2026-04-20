@@ -46,7 +46,6 @@ def test_compile_rule_tables_live_openai(tmp_path: Path) -> None:
         dry_run=False,
         budget_file=budget_path,
         show_llm_output=False,
-        reject_weak_extraction=False,
     )
 
     assert rules.version != "dry_run"

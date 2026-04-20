@@ -8,8 +8,12 @@ Column contracts (your exports):
 - **drugbank.csv**: drug_id, secondary_ids, name, type, description, indication, state, cas, status,
   targets, interactions
 
-Matching: **exact** normalized equality on ``drug_name`` (NCBI), ``drug_name_clean`` (OpenFDA), and
-DrugBank ``name`` split on comma/semicolon (**no substring** match — avoids nitroaspirin-style noise).
+Matching: **exact** normalized equality on ``drug_name`` (NCBI), ``drug_name_clean`` (OpenFDA).
+
+DrugBank: first exact token match on ``name`` (comma/semicolon split); else **word-boundary** match of
+query tokens against ``name`` or ``description`` (so ``ibuprofen`` matches ``Ibuprofen sodium``; avoids
+``aspirin`` matching inside ``nitroaspirin``). Optional ``drugbank_id`` / env ``DRUGBANK_ID`` pins a row.
+Add INN↔common pairs to ``_DRUGBANK_EQUIVALENTS`` where needed.
 Truncation before the LLM is applied again inside `compile_rule_tables`.
 """
 
@@ -171,7 +175,7 @@ _DRUGBANK_EQUIVALENTS: dict[str, frozenset[str]] = {
 
 
 def _drugbank_match_tokens(drug: str) -> set[str]:
-    """Normalized names/tokens that should match the same row as ``drug`` (exact, no substring)."""
+    """Normalized names/tokens that should match the same row as ``drug``."""
     d = _norm(drug)
     s: set[str] = {d}
     for k, syns in _DRUGBANK_EQUIVALENTS.items():
@@ -179,6 +183,48 @@ def _drugbank_match_tokens(drug: str) -> set[str]:
             s.add(k)
             s |= syns
     return s
+
+
+def _word_boundary_match(token: str, hay: str) -> bool:
+    """
+    True if ``token`` appears as a whole token in ``hay`` (case-insensitive).
+
+    Uses non-word-char boundaries so ``aspirin`` does not match inside ``nitroaspirin``,
+    but ``ibuprofen`` matches ``Ibuprofen sodium``.
+    """
+    if len(token) < 2:
+        return False
+    # (?<!\w) / (?!\w): word chars include letters; works for Unicode in Python 3 re.
+    pat = r"(?<!\w)" + re.escape(token) + r"(?!\w)"
+    return re.search(pat, hay, flags=re.IGNORECASE) is not None
+
+
+def _drugbank_row_matches_query(query: set[str], name: str, description: str) -> bool:
+    """Exact name-token match, else word-boundary match in name or description."""
+    if not name and not description:
+        return False
+
+    if name:
+        aliases = _split_drugbank_names(name)
+        full = _norm(name)
+        if aliases.intersection(query) or full in query:
+            return True
+
+    hay = f"{_norm(name)} {_norm(description)}".strip()
+    if not hay:
+        return False
+    for token in query:
+        if _word_boundary_match(token, hay):
+            return True
+    return False
+
+
+def _optional_drugbank_id(explicit: str | None) -> str | None:
+    """Use explicit ``drugbank_id`` if set, else ``DRUGBANK_ID`` from the environment."""
+    if explicit is not None and str(explicit).strip():
+        return str(explicit).strip()
+    env = os.environ.get("DRUGBANK_ID", "").strip()
+    return env or None
 
 
 def _row_get(row: dict[str, str], key: str) -> str:
@@ -215,7 +261,7 @@ def pubmed_text_for_drug(
     drug_n = _norm(drug)
     chunks: list[str] = []
     n = 0
-    with ncbi_csv.open(encoding="utf-8", newline="") as f:
+    with ncbi_csv.open(encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         if not reader.fieldnames:
             return ""
@@ -257,7 +303,7 @@ def openfda_text_for_drug(
 
     drug_n = _norm(drug)
     cols = OPENFDA_PRIORITY_COLUMNS if priority_only else OPENFDA_COLUMNS
-    with openfda_csv.open(encoding="utf-8", newline="") as f:
+    with openfda_csv.open(encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
             if _norm(_row_get(row, "drug_name_clean")) != drug_n:
@@ -272,30 +318,58 @@ def openfda_text_for_drug(
     return ""
 
 
-def drugbank_text_for_drug(drugbank_csv: Path, drug: str, *, max_chars: int = 24_000) -> str:
-    """Join DrugBank columns for the first row whose ``name`` matches this drug (exact token or full name)."""
+def _drugbank_row_to_text(row: dict[str, str]) -> str:
+    parts: list[str] = []
+    for col in DRUGBANK_COLUMNS:
+        val = _row_get(row, col)
+        if not _is_empty_cell(val):
+            parts.append(f"{col}: {val}")
+    return "\n".join(parts)
+
+
+def drugbank_text_for_drug(
+    drugbank_csv: Path,
+    drug: str,
+    *,
+    drugbank_id: str | None = None,
+    max_chars: int = 24_000,
+) -> str:
+    """Join DrugBank columns for the best row: prefer ``drugbank_id`` when set, else richest ``name`` match."""
     if not drugbank_csv.is_file():
         return ""
 
+    want_id = _optional_drugbank_id(drugbank_id)
+    if want_id:
+        best_text = ""
+        best_len = -1
+        with drugbank_csv.open(encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if _row_get(row, "drug_id").strip() != want_id:
+                    continue
+                block = _drugbank_row_to_text(row)
+                if len(block) > best_len:
+                    best_len = len(block)
+                    best_text = block
+        if best_text:
+            return best_text[:max_chars]
+
     query = _drugbank_match_tokens(drug)
-    with drugbank_csv.open(encoding="utf-8", newline="") as f:
+    best_text = ""
+    best_len = -1
+    with drugbank_csv.open(encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
             name = _row_get(row, "name")
-            if not name:
+            desc = _row_get(row, "description")
+            if not _drugbank_row_matches_query(query, name, desc):
                 continue
-            aliases = _split_drugbank_names(name)
-            full = _norm(name)
-            if not aliases.intersection(query) and full not in query:
-                continue
-            parts: list[str] = []
-            for col in DRUGBANK_COLUMNS:
-                val = _row_get(row, col)
-                if not _is_empty_cell(val):
-                    parts.append(f"{col}: {val}")
-            return "\n".join(parts)[:max_chars]
+            block = _drugbank_row_to_text(row)
+            if len(block) > best_len:
+                best_len = len(block)
+                best_text = block
 
-    return ""
+    return best_text[:max_chars] if best_text else ""
 
 
 def build_text_bundle(
@@ -306,9 +380,10 @@ def build_text_bundle(
     drugbank_csv: Path,
     pubmed_max_rows: int | None = None,
     openfda_priority_only: bool | None = None,
+    drugbank_id: str | None = None,
 ) -> tuple[str, str, str]:
     """Return (pubmed_text, openfda_text, drugbank_text) for `compile_rule_tables`."""
     pubmed = pubmed_text_for_drug(ncbi_csv, drug, max_rows=pubmed_max_rows)
     openfda = openfda_text_for_drug(openfda_csv, drug, priority_only=openfda_priority_only)
-    drugbank = drugbank_text_for_drug(drugbank_csv, drug)
+    drugbank = drugbank_text_for_drug(drugbank_csv, drug, drugbank_id=drugbank_id)
     return pubmed, openfda, drugbank
