@@ -184,38 +184,70 @@ This README summarizes the pipeline and the notebooks `data/processed/openfda.ip
 
 ---
 
-## 10. Clinical trial simulation engine (`clinical_sim/`)
+## 10. Clinical simulation runbook (`clinical_sim/`)
 
-A separate, self-contained module implements a **multi-layer trial simulator** (mechanistic PK/PD → stochastic variation → policy/control), plus an **offline LLM rule compiler** with a token budget. It now also includes:
+`clinical_sim/` is the simulation runtime and rule-compilation layer for trial experiments.
 
-- timestep-level world-state progression metrics (`response_ema`, `toxicity_ema`, `state_transition_count`);
-- cohort simulation with stratified subgroup summaries (`age|renal|genotype`).
+### 10.1 What it does
 
-Dependencies: `pip install -e ".[dev]"` (includes `numpy` and `openai`). Run phase tests:
+- **Layered simulator:** mechanistic PK/PD (`layer1.py`) → stochastic variation (`layer2.py`) → control/policy (`layer3.py`).
+- **Offline rule compilation:** `llm_compiler.py` builds a `RuleTable` from PubMed/OpenFDA/DrugBank text before simulation starts.
+- **Cohort analytics:** subgroup summaries by `age|renal|genotype`.
+- **Meta metrics:** `response_ema`, `toxicity_ema`, `state_transition_count`.
+
+### 10.2 Runtime behavior (important)
+
+- Inference runs require `OPENAI_API_KEY`.
+- Weak extraction is rejected by default (unless `--allow-weak-extraction` is explicitly passed).
+- On weak extraction failure, the CLI retries once with larger context windows.
+- Extraction quality is reported each run as `Extraction QC`:
+  - `confidence`
+  - `raw_null_fields`
+  - `postprocess_null_fields`
+  - `profile_fallback_applied`
+- For sparse metformin extraction, a metformin profile fallback is applied before final rule merge.
+
+### 10.3 Quick start
 
 ```bash
-pytest clinical_sim/tests -v
-```
+# Install dependencies
+pip install -e ".[dev]"
 
-Example driver (reads your processed CSVs by drug name):
+# Run tests
+python -m pytest clinical_sim/tests -q
 
-```bash
+# Single-patient inference run
 PYTHONPATH=clinical_sim python clinical_sim/main.py --drug ibuprofen
 
-# Cohort run (stratified summary output)
+# Cohort run
 PYTHONPATH=clinical_sim python clinical_sim/main.py --drug metformin --cohort-size 50 --cohort-seed 7
 
-# Engine-only dry run (explicit opt-in, no inference validity)
+# Engine-only dry run (no inference validity)
 PYTHONPATH=clinical_sim python clinical_sim/main.py --drug silicea --allow-dry-run
 ```
 
-Paths default to `data/processed/openfda_v1.csv`, `data/processed/ncbi_data.csv`, and `data/processed/drugbank.csv` (override with `--openfda-csv`, `--ncbi-csv`, `--drugbank-csv`). Text is built in `clinical_sim/csv_bundle.py`: **OpenFDA** and **NCBI** use exact match first, then word-boundary fallback (`metformin` matches `metformin hydrochloride`); **DrugBank** matches tokens in the `name` field. Inference runs require `OPENAI_API_KEY` (LLM-enabled rule compilation), and weak extractions are rejected by default.
+### 10.4 High-signal environment settings
 
-The simulation loop does **not** call the LLM directly; `compile_rule_tables` does before simulation.
+```bash
+LLM_PUBMED_CHARS=2000
+LLM_OPENFDA_CHARS=2000
+LLM_DRUGBANK_CHARS=3000
+LLM_MAX_NULL_FIELDS=10
+LLM_PROFILE_FALLBACK_NULL_FIELDS=10
+```
 
-When extraction fails due to weak signal, the CLI automatically retries once with larger context (`LLM_PUBMED_CHARS>=2000`, `LLM_OPENFDA_CHARS>=2000`, `LLM_DRUGBANK_CHARS>=3000`). The run also prints `Extraction QC` (confidence, raw/post-processed null count, and whether profile fallback was applied). For sparse metformin extraction, a metformin profile fallback is applied before final merge.
+Use `LLM_TOTAL_SOURCE_CHARS` if you prefer one combined budget split across all three sources.
 
-Recent test status in this repo for `clinical_sim/tests`:
-- `39 passed, 1 skipped`
-- `test_phase7.py` covers world-state progression metrics and cohort simulation outputs.
-- `test_llm_priors.py` and `test_llm_fallback.py` cover toxicity priors and sparse-extraction profile fallback.
+### 10.5 Input matching rules
+
+Defaults are `data/processed/openfda_v1.csv`, `data/processed/ncbi_data.csv`, `data/processed/drugbank.csv` (overridable by flags).
+
+- **NCBI/OpenFDA:** exact match first, then word-boundary fallback (e.g., `metformin` matches `metformin hydrochloride`).
+- **DrugBank:** token/alias-based matching on `name` with safe boundary matching.
+
+### 10.6 Current test coverage snapshot
+
+- `39 passed, 1 skipped` in `clinical_sim/tests`.
+- `test_phase7.py`: world-state progression + cohort summaries.
+- `test_llm_priors.py`: toxicity priors and guardrails.
+- `test_llm_fallback.py`: sparse-extraction profile fallback behavior.

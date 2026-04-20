@@ -61,32 +61,33 @@ Each ingest run writes manifests and checksums. Tests validate URL construction,
 The following are fully implemented:
 - End-to-end ingest paths for OpenFDA, NCBI, and DrugBank.
 - JSONL-first raw retention and structured extraction pipeline.
-- Rule-table schema and compiler integration for simulation parameters.
+- Rule-table schema and compiler integration for simulation parameters with extraction quality controls.
 - Multi-layer simulation loop with safety and response decision logic.
 - World-state progression metrics in the simulation meta layer (`response_ema`, `toxicity_ema`, transitions).
 - Cohort simulation runner with subgroup-level aggregated outputs.
-- CLI-driven workflow and project-level test setup.
+- CLI-driven workflow with extraction diagnostics (`confidence`, null-field counts, profile fallback status) and project-level test setup.
 
 These outcomes confirm the platform is ready for iterative calibration and scenario studies aimed at trial strategy optimization.
 
 ## VI. Discussion
 The most important design decision is the decomposition into deterministic, stochastic, and policy layers. This allows independent tuning of mechanistic assumptions, noise models, and intervention logic. It also improves interpretability compared with monolithic black-box simulation.
 
-Another key implementation choice is keeping LLM usage outside the simulation loop. The loop remains deterministic given a fixed rule table, while LLM extraction is treated as an offline compilation step with explicit budget and quality safeguards.
+Another key implementation choice is keeping LLM usage outside the simulation loop. The loop remains deterministic given a fixed rule table, while LLM extraction is treated as an offline compilation step with explicit budget, weak-extraction rejection, one-shot context retry, and profile-based fallback safeguards.
 
 ## VII. Limitations
 1) Source quality and naming variability can impact evidence linking.
-2) Drug-specific rule extraction quality depends on available context.
-3) Current rules still rely on profile priors/fallback when source extraction is sparse and require broader drug-class calibration for domain-specific deployment.
+2) Drug-specific rule extraction quality depends on source relevance and extraction robustness, not just context size.
+3) Current rules still rely on profile priors/fallback when extraction is sparse and need broader drug-class calibration for stronger scientific validity.
 4) Simulated outcomes are research-oriented and not clinical decision support.
 
 ## VIII. Future Work
 1) I am implementing richer synonym and ontology normalization (e.g., RxNorm/UMLS/DrugBank alias mapping) to improve cross-source drug entity resolution and prevent fallback to unmatched default-only runs.
 2) I am implementing retrospective-outcome calibration (with held-out validation) to improve rule-parameter realism and reduce synthetic response/toxicity drift.
-3) I am enforcing LLM-assisted rule compilation for all inference-targeted simulations; dry-run/default-table execution will be restricted to engine-testing mode only.
-4) I will expand cohort analysis with additional subgroup dimensions and outcome metrics.
-5) I will expand policy search (adaptive schedules and multi-arm comparison).
-6) I will add sensitivity and uncertainty quantification dashboards.
+3) I am enforcing LLM-assisted rule compilation for all inference-targeted simulations; dry-run/default-table execution is restricted to engine-testing mode only.
+4) I am extending profile-based fallback beyond metformin (e.g., NSAID and oncology-class templates) to reduce unstable default dominance.
+5) I will expand cohort analysis with additional subgroup dimensions and outcome metrics.
+6) I will expand policy search (adaptive schedules and multi-arm comparison).
+7) I will add sensitivity and uncertainty quantification dashboards.
 
 ## IX. Conclusion
 This project successfully implements a complete foundation for evidence-driven clinical trial simulation. The central objective, simulating trial behavior from integrated biomedical evidence, is already operational at a system level. The current platform supports reproducible ingest, structured evidence extraction, and multi-layer trial dynamics, providing a practical base for higher-fidelity validation and optimization studies.
