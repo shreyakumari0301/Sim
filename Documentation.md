@@ -38,7 +38,9 @@ The architecture has two integrated blocks: a data pipeline and a simulation eng
 2) **Layer 1 (Mechanistic):** PK decay, dosing absorption, receptor occupancy, pathway suppression, rebound behavior, response and toxicity accumulation.
 3) **Layer 2 (Stochastic):** Noise-driven response variation, adverse-event sampling, and covariate-based patient modifiers.
 4) **Layer 3 (Policy/Control):** Dose escalation/de-escalation, toxicity halts, and non-response discontinuation logic.
-5) **Rule Compilation:** LLM-assisted parameter extraction with strict token budget controls and deterministic dry-run fallback.
+5) **World-State Dynamics Refinement:** timestep-level simulation metadata now tracks `response_ema`, `toxicity_ema`, and `state_transition_count`.
+6) **Cohort and Stratified Simulation:** cohort-level simulation is implemented with subgroup summaries across age, renal function, and genotype buckets.
+7) **Rule Compilation:** LLM-assisted parameter extraction with strict token budget controls and deterministic dry-run fallback.
 
 ## IV. Methods
 ### A. Evidence Integration Strategy
@@ -61,6 +63,8 @@ The following are fully implemented:
 - JSONL-first raw retention and structured extraction pipeline.
 - Rule-table schema and compiler integration for simulation parameters.
 - Multi-layer simulation loop with safety and response decision logic.
+- World-state progression metrics in the simulation meta layer (`response_ema`, `toxicity_ema`, transitions).
+- Cohort simulation runner with subgroup-level aggregated outputs.
 - CLI-driven workflow and project-level test setup.
 
 These outcomes confirm the platform is ready for iterative calibration and scenario studies aimed at trial strategy optimization.
@@ -77,11 +81,12 @@ Another key implementation choice is keeping LLM usage outside the simulation lo
 4) Simulated outcomes are research-oriented and not clinical decision support.
 
 ## VIII. Future Work
-1) I am currently working on richer synonym and ontology normalization for stronger cross-source drug matching.
-2) My next implementation will focus on world state models and simulation behavior refinement across timesteps.
-3) I will extend the engine toward cohort-level simulation and stratified subgroup analysis.
-4) I plan to add calibration pipelines against retrospective outcomes.
-5) I will expand policy search (adaptive schedules and multi-arm comparison) and add sensitivity and uncertainty quantification dashboards.
+1) I am implementing richer synonym and ontology normalization (e.g., RxNorm/UMLS/DrugBank alias mapping) to improve cross-source drug entity resolution and prevent fallback to unmatched default-only runs.
+2) I am implementing retrospective-outcome calibration (with held-out validation) to improve rule-parameter realism and reduce synthetic response/toxicity drift.
+3) I am enforcing LLM-assisted rule compilation for all inference-targeted simulations; dry-run/default-table execution will be restricted to engine-testing mode only.
+4) I will expand cohort analysis with additional subgroup dimensions and outcome metrics.
+5) I will expand policy search (adaptive schedules and multi-arm comparison).
+6) I will add sensitivity and uncertainty quantification dashboards.
 
 ## IX. Conclusion
 This project successfully implements a complete foundation for evidence-driven clinical trial simulation. The central objective, simulating trial behavior from integrated biomedical evidence, is already operational at a system level. The current platform supports reproducible ingest, structured evidence extraction, and multi-layer trial dynamics, providing a practical base for higher-fidelity validation and optimization studies.

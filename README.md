@@ -186,7 +186,12 @@ This README summarizes the pipeline and the notebooks `data/processed/openfda.ip
 
 ## 10. Clinical trial simulation engine (`clinical_sim/`)
 
-A separate, self-contained module implements a **multi-layer trial simulator** (mechanistic PK/PD → stochastic variation → policy/control), plus an **offline LLM rule compiler** with a token budget. Dependencies: `pip install -e ".[dev]"` (includes `numpy` and `openai`). Run phase tests:
+A separate, self-contained module implements a **multi-layer trial simulator** (mechanistic PK/PD → stochastic variation → policy/control), plus an **offline LLM rule compiler** with a token budget. It now also includes:
+
+- timestep-level world-state progression metrics (`response_ema`, `toxicity_ema`, `state_transition_count`);
+- cohort simulation with stratified subgroup summaries (`age|renal|genotype`).
+
+Dependencies: `pip install -e ".[dev]"` (includes `numpy` and `openai`). Run phase tests:
 
 ```bash
 pytest clinical_sim/tests -v
@@ -195,9 +200,19 @@ pytest clinical_sim/tests -v
 Example driver (reads your processed CSVs by drug name):
 
 ```bash
-PYTHONPATH=clinical_sim python clinical_sim/main.py --drug silicea
+PYTHONPATH=clinical_sim python clinical_sim/main.py --drug ibuprofen
+
+# Cohort run (stratified summary output)
+PYTHONPATH=clinical_sim python clinical_sim/main.py --drug metformin --cohort-size 50 --cohort-seed 7
+
+# Engine-only dry run (explicit opt-in, no inference validity)
+PYTHONPATH=clinical_sim python clinical_sim/main.py --drug silicea --allow-dry-run
 ```
 
-Paths default to `data/processed/openfda_v1.csv`, `data/processed/ncbi_data.csv`, and `data/processed/drugbank.csv` (override with `--openfda-csv`, `--ncbi-csv`, `--drugbank-csv`). Text is built in `clinical_sim/csv_bundle.py`: **OpenFDA** rows match `drug_name_clean`; **NCBI** rows match `drug_name`; **DrugBank** rows match tokens in the `name` field. Pass `--llm` and `OPENAI_API_KEY` to call the API; otherwise rules stay in **dry-run** defaults.
+Paths default to `data/processed/openfda_v1.csv`, `data/processed/ncbi_data.csv`, and `data/processed/drugbank.csv` (override with `--openfda-csv`, `--ncbi-csv`, `--drugbank-csv`). Text is built in `clinical_sim/csv_bundle.py`: **OpenFDA** and **NCBI** use exact match first, then word-boundary fallback (`metformin` matches `metformin hydrochloride`); **DrugBank** matches tokens in the `name` field. Inference runs now require `OPENAI_API_KEY` (LLM-enabled rule compilation), and weak extractions are rejected by default. Use `--allow-dry-run` only for engine testing and `--allow-weak-extraction` only for debugging.
 
-The simulation loop does **not** call the LLM; only `compile_rule_tables` does when `--llm` is set.
+The simulation loop does **not** call the LLM directly; `compile_rule_tables` does before simulation.
+
+Recent test status in this repo for `clinical_sim/tests`:
+- `32 passed, 1 skipped`
+- `test_phase7.py` covers world-state progression metrics and cohort simulation outputs.

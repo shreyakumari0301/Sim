@@ -84,6 +84,9 @@ class SimulationMeta(BaseModel):
     trial_day: int = 0  # calendar day in trial
     rule_version: str = "0.0"  # version tag of current rule_tables
     rng_seed: int = 42
+    response_ema: float = 0.0  # smoothed response across timesteps
+    toxicity_ema: float = 0.0  # smoothed toxicity across timesteps
+    state_transition_count: int = 0  # number of disease-state transitions observed
 
 
 class WorldState(BaseModel):

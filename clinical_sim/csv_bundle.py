@@ -8,7 +8,8 @@ Column contracts (your exports):
 - **drugbank.csv**: drug_id, secondary_ids, name, type, description, indication, state, cas, status,
   targets, interactions
 
-Matching: **exact** normalized equality on ``drug_name`` (NCBI), ``drug_name_clean`` (OpenFDA).
+Matching: normalized equality first, then safe word-boundary fallback on ``drug_name`` (NCBI)
+and ``drug_name_clean`` (OpenFDA) so ``metformin`` matches ``metformin hydrochloride``.
 
 DrugBank: first exact token match on ``name`` (comma/semicolon split); else **word-boundary** match of
 query tokens against ``name`` or ``description`` (so ``ibuprofen`` matches ``Ibuprofen sodium``; avoids
@@ -234,6 +235,17 @@ def _row_get(row: dict[str, str], key: str) -> str:
     return str(v).strip()
 
 
+def _matches_query_value(value: str, query: str) -> bool:
+    """Exact normalized match, else whole-token containment (e.g., metformin in metformin hydrochloride)."""
+    q = _norm(query)
+    v = _norm(value)
+    if not q or not v:
+        return False
+    if v == q:
+        return True
+    return _word_boundary_match(q, v)
+
+
 def _is_empty_cell(val: str) -> bool:
     if not val:
         return True
@@ -249,7 +261,7 @@ def pubmed_text_for_drug(
     max_rows: int | None = None,
     max_chars: int = 24_000,
 ) -> str:
-    """Build PubMed context from ncbi_data.csv (exact ``drug_name`` match per row)."""
+    """Build PubMed context from ncbi_data.csv (exact + word-boundary ``drug_name`` matching)."""
     if not ncbi_csv.is_file():
         return ""
 
@@ -266,7 +278,7 @@ def pubmed_text_for_drug(
         if not reader.fieldnames:
             return ""
         for row in reader:
-            if _norm(_row_get(row, "drug_name")) != drug_n:
+            if not _matches_query_value(_row_get(row, "drug_name"), drug_n):
                 continue
             lines: list[str] = []
             for col in NCBI_COLUMNS:
@@ -290,7 +302,7 @@ def openfda_text_for_drug(
     max_chars: int = 24_000,
     priority_only: bool | None = None,
 ) -> str:
-    """Join OpenFDA columns for the first row where ``drug_name_clean`` matches exactly."""
+    """Join OpenFDA columns for the first row where ``drug_name_clean`` matches (exact + word boundary)."""
     if not openfda_csv.is_file():
         return ""
 
@@ -306,7 +318,7 @@ def openfda_text_for_drug(
     with openfda_csv.open(encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            if _norm(_row_get(row, "drug_name_clean")) != drug_n:
+            if not _matches_query_value(_row_get(row, "drug_name_clean"), drug_n):
                 continue
             parts: list[str] = []
             for col in cols:

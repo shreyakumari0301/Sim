@@ -2,17 +2,19 @@
 Example entry point: read three processed CSVs for one drug, compile rules, run simulation.
 
 From repo root:
-  PYTHONPATH=clinical_sim python clinical_sim/main.py --drug silicea
-  PYTHONPATH=clinical_sim python clinical_sim/main.py --drug silicea --llm
+  PYTHONPATH=clinical_sim python clinical_sim/main.py --drug ibuprofen
+  PYTHONPATH=clinical_sim python clinical_sim/main.py --drug silicea --allow-dry-run
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
 
+from cohort import run_cohort_simulation
 from csv_bundle import build_text_bundle
 from llm_compiler import compile_rule_tables, llm_prompt_char_counts, load_repo_dotenv
 from loop import run_simulation
@@ -57,9 +59,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Optional DrugBank drug_id for this run (overrides name match). Same as env DRUGBANK_ID.",
     )
     p.add_argument(
-        "--llm",
+        "--allow-dry-run",
         action="store_true",
-        help="Call LLM (OPENAI_API_KEY in env or .env). Use OPENAI_BASE_URL for OpenRouter. Default: dry-run.",
+        help="Allow default-table dry-run when OPENAI_API_KEY is missing. Use only for engine testing, not inference.",
     )
     p.add_argument(
         "--no-show-llm-output",
@@ -69,9 +71,26 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--strict-llm",
         action="store_true",
-        help="Fail if the model returns too many JSON nulls (LLM_MAX_NULL_FIELDS). Default: merge with defaults.",
+        help="Legacy no-op flag: strict extraction is now enforced by default.",
+    )
+    p.add_argument(
+        "--allow-weak-extraction",
+        action="store_true",
+        help="Allow weak LLM extraction (many null fields) to merge with defaults. Not recommended for inference.",
     )
     p.add_argument("--timesteps", type=int, default=90, help="Simulation length")
+    p.add_argument(
+        "--cohort-size",
+        type=int,
+        default=1,
+        help="Run a cohort simulation with N patients (default: 1 = single patient mode).",
+    )
+    p.add_argument(
+        "--cohort-seed",
+        type=int,
+        default=7,
+        help="Random seed used for cohort patient sampling (default: 7).",
+    )
     args = p.parse_args(argv)
 
     pubmed_text, openfda_text, drugbank_text = build_text_bundle(
@@ -86,12 +105,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  PubMed blob length:   {len(pubmed_text)} chars (from {args.ncbi_csv})")
     print(f"  OpenFDA blob length:  {len(openfda_text)} chars (from {args.openfda_csv})")
     print(f"  DrugBank blob length: {len(drugbank_text)} chars (from {args.drugbank_csv})")
-    if args.llm:
-        lp, lo, ld = llm_prompt_char_counts(pubmed_text, openfda_text, drugbank_text)
-        print(
-            f"  LLM sees (trimmed):   PubMed {lp} + OpenFDA {lo} + DrugBank {ld} chars "
-            f"(set LLM_*_CHARS / LLM_TOTAL_SOURCE_CHARS to send more)"
-        )
+    lp, lo, ld = llm_prompt_char_counts(pubmed_text, openfda_text, drugbank_text)
+    print(
+        f"  LLM sees (trimmed):   PubMed {lp} + OpenFDA {lo} + DrugBank {ld} chars "
+        f"(set LLM_*_CHARS / LLM_TOTAL_SOURCE_CHARS to send more)"
+    )
 
     if not pubmed_text and args.ncbi_csv.is_file():
         print(
@@ -102,10 +120,17 @@ def main(argv: list[str] | None = None) -> int:
     if not args.ncbi_csv.is_file():
         print(f"  Warning: NCBI file missing: {args.ncbi_csv}", file=sys.stderr)
 
-    dry_run = not args.llm
-    if args.llm and not os.environ.get("OPENAI_API_KEY"):
-        print("OPENAI_API_KEY not set; falling back to dry_run=True", file=sys.stderr)
-        dry_run = True
+    has_api_key = bool(os.environ.get("OPENAI_API_KEY"))
+    dry_run = not has_api_key
+    if dry_run and not args.allow_dry_run:
+        print(
+            "OPENAI_API_KEY not set. LLM is required for inference runs; "
+            "set OPENAI_API_KEY or use --allow-dry-run for engine testing only.",
+            file=sys.stderr,
+        )
+        return 2
+    if dry_run:
+        print("Running in explicit dry-run engine-testing mode (--allow-dry-run).", file=sys.stderr)
 
     rules = compile_rule_tables(
         pubmed_text,
@@ -113,8 +138,8 @@ def main(argv: list[str] | None = None) -> int:
         drugbank_text,
         dry_run=dry_run,
         drug=args.drug,
-        show_llm_output=args.llm and not dry_run and not args.no_show_llm_output,
-        reject_weak_extraction=args.strict_llm,
+        show_llm_output=not dry_run and not args.no_show_llm_output,
+        reject_weak_extraction=not args.allow_weak_extraction,
     )
 
     print(f"\nRules: v{rules.version} — {rules.source_summary!r}")
@@ -139,20 +164,40 @@ def main(argv: list[str] | None = None) -> int:
     state = WorldState()
     state = state.copy_updated(patient=patient, treatment=treatment)
 
-    history = run_simulation(
-        initial_state=state,
-        rule_tables=rules.to_dict(),
-        n_timesteps=args.timesteps,
-        verbose=False,
-    )
-    final = history[-1]
-    print(f"\nFinal t={args.timesteps - 1}:")
-    print(f"  Response:    {final.effects.clinical_response:.2f}")
-    print(f"  Tolerance:   {final.tolerance.tolerance_level:.3f}")
-    print(f"  Resistance:  {final.tolerance.resistance_flag}")
-    print(f"  AE severity: {final.toxicity.ae_severity}")
-    print(f"  Drug active: {final.treatment.drug_active}")
-    print(f"  Disease:     {final.effects.disease_state}")
+    if args.cohort_size > 1:
+        out = run_cohort_simulation(
+            initial_state=state,
+            rule_tables=rules.to_dict(),
+            n_patients=args.cohort_size,
+            n_timesteps=args.timesteps,
+            cohort_seed=args.cohort_seed,
+        )
+        print("\nCohort summary:")
+        print(f"  N:               {out['n_patients']}")
+        print(f"  Mean response:   {out['mean_response']:.3f}")
+        print(f"  Std response:    {out['std_response']:.3f}")
+        print(f"  Severe AE rate:  {out['severe_ae_rate']:.3f}")
+        print(f"  Drug active rate:{out['drug_active_rate']:.3f}")
+        print("\nSubgroup summary (age|renal|genotype):")
+        print(json.dumps(out["subgroup_summary"], indent=2))
+    else:
+        history = run_simulation(
+            initial_state=state,
+            rule_tables=rules.to_dict(),
+            n_timesteps=args.timesteps,
+            verbose=False,
+        )
+        final = history[-1]
+        print(f"\nFinal t={args.timesteps - 1}:")
+        print(f"  Response:    {final.effects.clinical_response:.2f}")
+        print(f"  Tolerance:   {final.tolerance.tolerance_level:.3f}")
+        print(f"  Resistance:  {final.tolerance.resistance_flag}")
+        print(f"  AE severity: {final.toxicity.ae_severity}")
+        print(f"  Drug active: {final.treatment.drug_active}")
+        print(f"  Disease:     {final.effects.disease_state}")
+        print(f"  Response EMA:{final.meta.response_ema:.3f}")
+        print(f"  Toxicity EMA:{final.meta.toxicity_ema:.3f}")
+        print(f"  Transitions: {final.meta.state_transition_count}")
     return 0
 
 

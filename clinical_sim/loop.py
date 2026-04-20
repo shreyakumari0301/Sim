@@ -36,10 +36,12 @@ def run_simulation(
         )
         state = state.copy_updated(meta=meta)
 
+        prev = state
         state = apply_layer1(state, rule_tables)
         state = apply_layer2(state, rule_tables)
         state = _update_latent(state, rule_tables)
         state = apply_layer3(state, rule_tables)
+        state = _update_meta_dynamics(state, prev)
 
         history.append(copy.deepcopy(state))
 
@@ -71,3 +73,23 @@ def _update_latent(state: WorldState, rule_tables: dict) -> WorldState:
         tol.resistance_flag = True
 
     return state.copy_updated(tolerance=tol)
+
+
+def _update_meta_dynamics(state: WorldState, prev_state: WorldState) -> WorldState:
+    """
+    Track smoothed dynamics and disease transitions across timesteps.
+
+    These summary signals make downstream cohort analysis easier without changing
+    the mechanistic/stochastic/control layer contracts.
+    """
+    alpha = 0.2
+    prev_meta = prev_state.meta
+    meta = state.meta.model_copy()
+
+    meta.response_ema = (1.0 - alpha) * prev_meta.response_ema + alpha * state.effects.clinical_response
+    meta.toxicity_ema = (1.0 - alpha) * prev_meta.toxicity_ema + alpha * state.toxicity.cumulative_tox
+    meta.state_transition_count = prev_meta.state_transition_count
+    if state.effects.disease_state != prev_state.effects.disease_state:
+        meta.state_transition_count += 1
+
+    return state.copy_updated(meta=meta)

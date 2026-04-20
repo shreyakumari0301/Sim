@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from csv_bundle import build_text_bundle, drugbank_text_for_drug
+from csv_bundle import build_text_bundle, drugbank_text_for_drug, openfda_text_for_drug, pubmed_text_for_drug
 
 
 def test_build_text_bundle_matches_drug(tmp_path: Path) -> None:
@@ -32,6 +32,28 @@ def test_build_text_bundle_matches_drug(tmp_path: Path) -> None:
     assert "Aspirin study" in p and "Smith J" in p
     assert "COX inhibition" in o
     assert "DB00945" in d and "BTD1" in d and "50-78-2" in d
+
+
+def test_pubmed_drug_name_word_boundary_match(tmp_path: Path) -> None:
+    ncbi = tmp_path / "ncbi_data.csv"
+    ncbi.write_text(
+        "pmid,title,abstract,authors,journal,pub_date,doi,drug_name\n"
+        "1,Metformin trial,Text,A,J,2020-01-01,10.1/x,metformin hydrochloride\n",
+        encoding="utf-8",
+    )
+    text = pubmed_text_for_drug(ncbi, "metformin")
+    assert "Metformin trial" in text
+
+
+def test_openfda_drug_name_word_boundary_match(tmp_path: Path) -> None:
+    openfda = tmp_path / "openfda_v1.csv"
+    openfda.write_text(
+        "drug_name_clean,warnings,mechanism_of_action\n"
+        "metformin hydrochloride,Do not use with X,AMPK pathway\n",
+        encoding="utf-8",
+    )
+    text = openfda_text_for_drug(openfda, "metformin")
+    assert "AMPK pathway" in text
 
 
 def test_drugbank_aspirin_matches_inn_only(tmp_path: Path) -> None:
