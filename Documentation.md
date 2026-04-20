@@ -92,6 +92,92 @@ Another key implementation choice is keeping LLM usage outside the simulation lo
 ## IX. Conclusion
 This project successfully implements a complete foundation for evidence-driven clinical trial simulation. The central objective, simulating trial behavior from integrated biomedical evidence, is already operational at a system level. The current platform supports reproducible ingest, structured evidence extraction, and multi-layer trial dynamics, providing a practical base for higher-fidelity validation and optimization studies.
 
+## X. LLM Format and Execution
+### A. LLM output format (strict JSON contract)
+The rule compiler (`clinical_sim/llm_compiler.py`) expects one JSON object that maps to the `RuleTable` fields used by the simulator. The model output is parsed, validated, then merged into defaults for any missing fields.
+
+Expected JSON shape:
+```json
+{
+  "half_life": 6.0,
+  "kd": 80.0,
+  "emax": 0.35,
+  "mic": 10.0,
+  "pathway_suppression": 0.4,
+  "tox_rate": 0.002,
+  "tolerance_rate": 0.001,
+  "tolerance_threshold": 300.0,
+  "receptor_recovery": 0.02,
+  "rebound_magnitude": 0.15,
+  "rebound_decay": 0.1,
+  "biomarker_sensitivity": 0.8,
+  "response_threshold": 0.04,
+  "response_rate_alpha": 2.5,
+  "response_rate_beta": 1.5,
+  "ae_probability": 0.03,
+  "ae_severity_weights": [0.6, 0.25, 0.1, 0.04, 0.01],
+  "noise_sd": 0.02,
+  "hill_n": 1.2,
+  "tox_halt_grade": 3,
+  "escalation_threshold": 0.3,
+  "escalation_day": 14,
+  "response_eval_day": 45,
+  "max_dose": 2000.0,
+  "dose_step": 500.0,
+  "de_escalation_grade": 2,
+  "non_response_day": 60,
+  "non_response_cutoff": 0.15,
+  "grade4_auto_stop": false,
+  "source_summary": "Short source-grounded clinical summary."
+}
+```
+
+Runtime safeguards:
+- weak extraction can be rejected (strict behavior by default);
+- one automatic retry uses larger context windows;
+- extraction QC is printed (`confidence`, null counts, profile fallback);
+- sparse metformin extraction can be repaired with profile fallback and guardrails.
+
+### B. How to run
+From repo root:
+
+```bash
+# 1) Install dependencies
+pip install -e ".[dev]"
+
+# 2) Run tests
+python -m pytest clinical_sim/tests -q
+```
+
+Inference run (LLM-enabled):
+```bash
+PYTHONPATH=clinical_sim python clinical_sim/main.py --drug metformin
+```
+
+Cohort run:
+```bash
+PYTHONPATH=clinical_sim python clinical_sim/main.py --drug metformin --cohort-size 50 --cohort-seed 7
+```
+
+Engine-only dry run (no inference validity):
+```bash
+PYTHONPATH=clinical_sim python clinical_sim/main.py --drug silicea --allow-dry-run
+```
+
+Recommended LLM context settings:
+```bash
+LLM_PUBMED_CHARS=2000
+LLM_OPENFDA_CHARS=2000
+LLM_DRUGBANK_CHARS=3000
+LLM_MAX_NULL_FIELDS=10
+LLM_PROFILE_FALLBACK_NULL_FIELDS=10
+```
+
+Debugging weak extraction (for inspection only):
+```bash
+PYTHONPATH=clinical_sim python clinical_sim/main.py --drug metformin --allow-weak-extraction
+```
+
 ## References
 [1] OpenFDA, "OpenFDA API," [Online]. Available: https://open.fda.gov/
 
