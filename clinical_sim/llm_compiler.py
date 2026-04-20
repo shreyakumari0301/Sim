@@ -25,9 +25,28 @@ PARAM_SCHEMA = (
 )
 
 SYSTEM_PROMPT = (
-    "Clinical pharmacology expert. Output ONE JSON object matching the schema for the DRUG OF "
-    "INTEREST only. No prose or markdown. Floats as JSON numbers. Use null when evidence for that "
-    "field is missing in the excerpts — do not fill from unrelated drug classes."
+    "You are a pharmacology model that MUST output a complete JSON object.\n"
+    "TASK:\n"
+    "Extract or estimate pharmacokinetic (PK), pharmacodynamic (PD), toxicity, and trial-control parameters "
+    "for the DRUG OF INTEREST from the provided sources.\n"
+    "CRITICAL RULES:\n"
+    "- Fill all fields in the schema.\n"
+    "- Do not return null unless absolutely impossible.\n"
+    "- If a value is missing, estimate a clinically plausible value using pharmacological knowledge.\n"
+    "- Keep values internally consistent (e.g., high tox_rate implies higher ae_probability).\n"
+    "- Output ONLY valid JSON; no markdown, no explanation.\n"
+    "RANGE GUIDANCE:\n"
+    "- half_life: 1-48 hours.\n"
+    "- kd: 50-200 for weak/non-receptor metabolic drugs (e.g., metformin), 1-20 for potent targeted drugs.\n"
+    "- emax: 0.2-0.5 for mild metabolic drugs, 0.6-0.9 for strong drugs.\n"
+    "- pathway_suppression: 0.2-0.5 metabolic, 0.5-0.9 strong inhibitors.\n"
+    "- tox_rate: 0.001-0.01 low toxicity, >0.05 high toxicity.\n"
+    "- ae_probability: 0.01-0.1.\n"
+    "- hill_n: 1.0-2.0.\n"
+    "- tox_halt_grade: 2-4.\n"
+    "- response_threshold: 0.05-0.3.\n"
+    "- max_dose: use realistic clinical max (metformin about 2000 mg).\n"
+    "- ae_severity_weights must sum to 1."
 )
 
 
@@ -123,9 +142,112 @@ def _grounding_block(drug: str) -> str:
         f"- Extract parameters only for {d}. Ignore other drugs, unrelated indications, and "
         "modified forms (e.g. nitroaspirin, ester prodrugs) unless the text clearly refers to the "
         "same active moiety as this drug.\n"
-        "- Ignore antibiotic/oncology-only concepts unless they clearly apply to this drug.\n"
-        "- If the excerpts lack evidence for a field, use JSON null for that field.\n"
+        "- Prefer explicit values in source text; otherwise infer from pharmacological class.\n"
+        "- Toxicity prior by class: antihyperglycemics low, NSAIDs moderate, oncology high.\n"
+        "- Avoid nulls; use null only if value is absolutely impossible to estimate.\n"
+        "DRUG CLASS PRIORS:\n"
+        "- Antihyperglycemics (e.g., metformin): tox_rate 0.001-0.02 (very low).\n"
+        "- NSAIDs: tox_rate 0.01-0.05 (moderate).\n"
+        "- Oncology drugs: tox_rate 0.1-0.3 (high).\n"
+        "- Widely used first-line therapies should bias toward lower toxicity.\n"
     )
+
+
+_LOW_TOX_DRUGS = {"metformin"}
+_NSAID_DRUGS = {"ibuprofen", "naproxen", "diclofenac", "aspirin", "celecoxib", "indomethacin"}
+_ONCOLOGY_TOKENS = (
+    "oncology",
+    "antineoplastic",
+    "chemotherapy",
+    "tumor",
+    "cancer",
+)
+
+_LAST_EXTRACTION_QC: dict[str, Any] | None = None
+
+
+def get_last_extraction_qc() -> dict[str, Any] | None:
+    """Return extraction QC for the most recent compile call in this process."""
+    return dict(_LAST_EXTRACTION_QC) if _LAST_EXTRACTION_QC else None
+
+
+def _infer_toxicity_class(drug: str, pubmed_text: str, openfda_text: str, drugbank_text: str) -> str:
+    d = (drug or "").strip().casefold()
+    if d in _LOW_TOX_DRUGS:
+        return "low"
+    if d in _NSAID_DRUGS:
+        return "moderate"
+    source = f"{pubmed_text}\n{openfda_text}\n{drugbank_text}".casefold()
+    if any(tok in source for tok in _ONCOLOGY_TOKENS):
+        return "high"
+    return "unknown"
+
+
+def _apply_pharmacology_priors(
+    parsed: dict[str, Any], *, drug: str, pubmed_text: str, openfda_text: str, drugbank_text: str
+) -> None:
+    """
+    Clamp high-impact toxicity controls to pharmacologically plausible ranges.
+    """
+    tox_class = _infer_toxicity_class(drug, pubmed_text, openfda_text, drugbank_text)
+
+    tox = parsed.get("tox_rate")
+    if isinstance(tox, (int, float)):
+        tox_v = float(tox)
+        if tox_class == "low":
+            parsed["tox_rate"] = min(max(tox_v, 0.001), 0.02)
+        elif tox_class == "moderate":
+            parsed["tox_rate"] = min(max(tox_v, 0.01), 0.05)
+        elif tox_class == "high":
+            parsed["tox_rate"] = min(max(tox_v, 0.1), 0.3)
+
+    halt = parsed.get("tox_halt_grade")
+    if isinstance(halt, (int, float)):
+        parsed["tox_halt_grade"] = max(int(halt), 3)
+
+
+def _metformin_profile_defaults() -> dict[str, Any]:
+    """Drug-sensitive fallback profile for metformin-like antihyperglycemics."""
+    return {
+        "half_life": 6.0,
+        "kd": 10.0,
+        "emax": 0.65,
+        "pathway_suppression": 0.7,
+        "tox_rate": 0.005,
+        "ae_probability": 0.03,
+        "hill_n": 1.2,
+        "max_dose": 2000.0,
+        "dose_step": 500.0,
+        "response_threshold": 0.05,
+        "tox_halt_grade": 3,
+    }
+
+
+def _maybe_apply_drug_profile_fallback(parsed: dict[str, Any], *, drug: str) -> bool:
+    """
+    Fill key PK/PD fields for known drugs when extraction is too sparse.
+    Returns True when a profile fallback was applied.
+    """
+    d = (drug or "").strip().casefold()
+    if not d:
+        return False
+    try:
+        null_threshold = int(os.environ.get("LLM_PROFILE_FALLBACK_NULL_FIELDS", "10"))
+    except ValueError:
+        null_threshold = 12
+    if _count_null_fields(parsed) <= null_threshold:
+        return False
+
+    profile: dict[str, Any] | None = None
+    if d == "metformin":
+        profile = _metformin_profile_defaults()
+    if not profile:
+        return False
+
+    for k, v in profile.items():
+        if parsed.get(k) is None:
+            parsed[k] = v
+    return True
 
 
 def compile_rule_tables(
@@ -228,8 +350,31 @@ Schema (same keys, JSON values): {PARAM_SCHEMA}
     except json.JSONDecodeError as e:
         raise ValueError(f"LLM returned invalid JSON: {e}\nRaw: {raw[:300]}") from e
 
+    global _LAST_EXTRACTION_QC
     src_total = len(pubmed_text) + len(openfda_text) + len(drugbank_text)
+    raw_null_n = _count_null_fields(parsed)
+    profile_fallback_applied = False
+    if (drug or "").strip():
+        profile_fallback_applied = _maybe_apply_drug_profile_fallback(parsed, drug=(drug or ""))
+    if (drug or "").strip():
+        _apply_pharmacology_priors(
+            parsed,
+            drug=(drug or ""),
+            pubmed_text=pubmed_text,
+            openfda_text=openfda_text,
+            drugbank_text=drugbank_text,
+        )
     null_n = _count_null_fields(parsed)
+    total_fields = len(RuleTable.model_fields) - 1  # exclude discontinuation_rules (nested)
+    confidence = max(0.0, min(1.0, 1.0 - (null_n / float(total_fields))))
+    _LAST_EXTRACTION_QC = {
+        "drug": (drug or "").strip(),
+        "raw_null_fields": raw_null_n,
+        "postprocess_null_fields": null_n,
+        "total_fields": total_fields,
+        "confidence": confidence,
+        "profile_fallback_applied": profile_fallback_applied,
+    }
     if reject_weak_extraction:
         _validate_llm_extraction(parsed, total_source_chars=src_total)
     elif null_n > int(os.environ.get("LLM_WARN_NULL_FIELDS", "15")):

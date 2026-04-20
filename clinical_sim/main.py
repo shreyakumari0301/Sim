@@ -16,13 +16,36 @@ from pathlib import Path
 
 from cohort import run_cohort_simulation
 from csv_bundle import build_text_bundle
-from llm_compiler import compile_rule_tables, llm_prompt_char_counts, load_repo_dotenv
+from llm_compiler import compile_rule_tables, get_last_extraction_qc, llm_prompt_char_counts, load_repo_dotenv
 from loop import run_simulation
 from state import Patient, Treatment, WorldState
 
 
 def _default_processed(name: str) -> Path:
     return Path(__file__).resolve().parent.parent / "data" / "processed" / name
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _boost_llm_context() -> tuple[int, int, int]:
+    """
+    Increase per-source LLM context windows for retry.
+
+    Defaults: 800/800/800 -> 2000/2000/3000 (PubMed/OpenFDA/DrugBank).
+    If env values are already higher, preserve the larger value.
+    """
+    pm = max(_int_env("LLM_PUBMED_CHARS", 800), 2000)
+    of = max(_int_env("LLM_OPENFDA_CHARS", 800), 2000)
+    db = max(_int_env("LLM_DRUGBANK_CHARS", 800), 3000)
+    os.environ["LLM_PUBMED_CHARS"] = str(pm)
+    os.environ["LLM_OPENFDA_CHARS"] = str(of)
+    os.environ["LLM_DRUGBANK_CHARS"] = str(db)
+    return pm, of, db
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -66,17 +89,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--no-show-llm-output",
         action="store_true",
-        help="With --llm, do not print the model JSON and merged RuleTable (default is to show).",
-    )
-    p.add_argument(
-        "--strict-llm",
-        action="store_true",
-        help="Legacy no-op flag: strict extraction is now enforced by default.",
+        help="Do not print model JSON and merged RuleTable (default is to show).",
     )
     p.add_argument(
         "--allow-weak-extraction",
         action="store_true",
         help="Allow weak LLM extraction (many null fields) to merge with defaults. Not recommended for inference.",
+    )
+    p.add_argument(
+        "--no-auto-retry-context",
+        action="store_true",
+        help="Disable automatic one-time retry with larger LLM context after strict weak-extraction failure.",
     )
     p.add_argument("--timesteps", type=int, default=90, help="Simulation length")
     p.add_argument(
@@ -132,17 +155,47 @@ def main(argv: list[str] | None = None) -> int:
     if dry_run:
         print("Running in explicit dry-run engine-testing mode (--allow-dry-run).", file=sys.stderr)
 
-    rules = compile_rule_tables(
-        pubmed_text,
-        openfda_text,
-        drugbank_text,
-        dry_run=dry_run,
-        drug=args.drug,
-        show_llm_output=not dry_run and not args.no_show_llm_output,
-        reject_weak_extraction=not args.allow_weak_extraction,
-    )
+    reject_weak = not args.allow_weak_extraction
+    try:
+        rules = compile_rule_tables(
+            pubmed_text,
+            openfda_text,
+            drugbank_text,
+            dry_run=dry_run,
+            drug=args.drug,
+            show_llm_output=not dry_run and not args.no_show_llm_output,
+            reject_weak_extraction=reject_weak,
+        )
+    except ValueError as e:
+        weak_msg = "LLM extraction too weak"
+        if dry_run or not reject_weak or args.no_auto_retry_context or weak_msg not in str(e):
+            raise
+        pm, of, db = _boost_llm_context()
+        print(
+            "Strict extraction failed on first pass; retrying once with increased context "
+            f"(PubMed={pm}, OpenFDA={of}, DrugBank={db}).",
+            file=sys.stderr,
+        )
+        rules = compile_rule_tables(
+            pubmed_text,
+            openfda_text,
+            drugbank_text,
+            dry_run=False,
+            drug=args.drug,
+            show_llm_output=not args.no_show_llm_output,
+            reject_weak_extraction=True,
+        )
 
     print(f"\nRules: v{rules.version} — {rules.source_summary!r}")
+    qc = get_last_extraction_qc()
+    if qc:
+        print(
+            "Extraction QC: "
+            f"confidence={qc['confidence']:.2f}, "
+            f"nulls={qc['postprocess_null_fields']}/{qc['total_fields']} "
+            f"(raw={qc['raw_null_fields']}), "
+            f"profile_fallback={qc['profile_fallback_applied']}"
+        )
 
     from budget import TokenBudget
 

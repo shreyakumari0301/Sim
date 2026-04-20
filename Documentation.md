@@ -40,7 +40,7 @@ The architecture has two integrated blocks: a data pipeline and a simulation eng
 4) **Layer 3 (Policy/Control):** Dose escalation/de-escalation, toxicity halts, and non-response discontinuation logic.
 5) **World-State Dynamics Refinement:** timestep-level simulation metadata now tracks `response_ema`, `toxicity_ema`, and `state_transition_count`.
 6) **Cohort and Stratified Simulation:** cohort-level simulation is implemented with subgroup summaries across age, renal function, and genotype buckets.
-7) **Rule Compilation:** LLM-assisted parameter extraction with strict token budget controls and deterministic dry-run fallback.
+7) **Rule Compilation:** LLM-assisted parameter extraction with token budget controls, weak-extraction rejection, automatic context retry, and extraction-QC reporting (confidence + null-field diagnostics).
 
 ## IV. Methods
 ### A. Evidence Integration Strategy
@@ -77,7 +77,7 @@ Another key implementation choice is keeping LLM usage outside the simulation lo
 ## VII. Limitations
 1) Source quality and naming variability can impact evidence linking.
 2) Drug-specific rule extraction quality depends on available context.
-3) Current rules are generalized defaults and require calibration for domain-specific deployment.
+3) Current rules still rely on profile priors/fallback when source extraction is sparse and require broader drug-class calibration for domain-specific deployment.
 4) Simulated outcomes are research-oriented and not clinical decision support.
 
 ## VIII. Future Work

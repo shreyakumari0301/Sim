@@ -209,10 +209,13 @@ PYTHONPATH=clinical_sim python clinical_sim/main.py --drug metformin --cohort-si
 PYTHONPATH=clinical_sim python clinical_sim/main.py --drug silicea --allow-dry-run
 ```
 
-Paths default to `data/processed/openfda_v1.csv`, `data/processed/ncbi_data.csv`, and `data/processed/drugbank.csv` (override with `--openfda-csv`, `--ncbi-csv`, `--drugbank-csv`). Text is built in `clinical_sim/csv_bundle.py`: **OpenFDA** and **NCBI** use exact match first, then word-boundary fallback (`metformin` matches `metformin hydrochloride`); **DrugBank** matches tokens in the `name` field. Inference runs now require `OPENAI_API_KEY` (LLM-enabled rule compilation), and weak extractions are rejected by default. Use `--allow-dry-run` only for engine testing and `--allow-weak-extraction` only for debugging.
+Paths default to `data/processed/openfda_v1.csv`, `data/processed/ncbi_data.csv`, and `data/processed/drugbank.csv` (override with `--openfda-csv`, `--ncbi-csv`, `--drugbank-csv`). Text is built in `clinical_sim/csv_bundle.py`: **OpenFDA** and **NCBI** use exact match first, then word-boundary fallback (`metformin` matches `metformin hydrochloride`); **DrugBank** matches tokens in the `name` field. Inference runs require `OPENAI_API_KEY` (LLM-enabled rule compilation), and weak extractions are rejected by default.
 
 The simulation loop does **not** call the LLM directly; `compile_rule_tables` does before simulation.
 
+When extraction fails due to weak signal, the CLI automatically retries once with larger context (`LLM_PUBMED_CHARS>=2000`, `LLM_OPENFDA_CHARS>=2000`, `LLM_DRUGBANK_CHARS>=3000`). The run also prints `Extraction QC` (confidence, raw/post-processed null count, and whether profile fallback was applied). For sparse metformin extraction, a metformin profile fallback is applied before final merge.
+
 Recent test status in this repo for `clinical_sim/tests`:
-- `32 passed, 1 skipped`
+- `39 passed, 1 skipped`
 - `test_phase7.py` covers world-state progression metrics and cohort simulation outputs.
+- `test_llm_priors.py` and `test_llm_fallback.py` cover toxicity priors and sparse-extraction profile fallback.
