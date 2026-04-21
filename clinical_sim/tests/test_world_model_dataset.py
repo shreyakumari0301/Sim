@@ -49,3 +49,4 @@ def test_build_transition_dataset_rows_match_timesteps() -> None:
     assert "s_clinical_response" in flat[0]
     assert "a_action_code" in flat[0]
     assert "y_clinical_response" in flat[0]
+    assert flat[0]["drug_id"] == 0.0

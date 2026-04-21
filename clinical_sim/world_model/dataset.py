@@ -7,6 +7,7 @@ from typing import Any
 from loop import run_simulation
 from state import WorldState
 from world_model.adapter import infer_action, patient_context, state_to_vector
+from world_model.drug_rules import drug_id_for_name
 from world_model.schema import TransitionRecord
 
 
@@ -65,6 +66,7 @@ def transitions_to_rows(records: list[TransitionRecord]) -> list[dict[str, float
         row: dict[str, float | int | str] = {
             "run_id": r.run_id,
             "drug_name": r.drug_name,
+            "drug_id": drug_id_for_name(r.drug_name),
             "timestep": r.timestep,
             "age": r.age,
             "renal_function": r.renal_function,
