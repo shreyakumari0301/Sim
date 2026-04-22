@@ -184,70 +184,51 @@ This README summarizes the pipeline and the notebooks `data/processed/openfda.ip
 
 ---
 
-## 10. Clinical simulation runbook (`clinical_sim/`)
+## 10. Clinical simulation & world model (`clinical_sim/`)
 
-`clinical_sim/` is the simulation runtime and rule-compilation layer for trial experiments.
+This repo layers **data ingestion → LLM rule compilation → mechanistic simulation** and a **learned world model** trained on simulator transitions. Narrative detail lives in `Documentation.md` (Section II-A and Section X).
 
-### 10.1 What it does
+**All copy-paste commands** (install, tests, `main.py`, dataset generation, training, eval) are in **`CLINICAL_SIM_COMMANDS.md`**.
 
-- **Layered simulator:** mechanistic PK/PD (`layer1.py`) → stochastic variation (`layer2.py`) → control/policy (`layer3.py`).
-- **Offline rule compilation:** `llm_compiler.py` builds a `RuleTable` from PubMed/OpenFDA/DrugBank text before simulation starts.
-- **Cohort analytics:** subgroup summaries by `age|renal|genotype`.
-- **Meta metrics:** `response_ema`, `toxicity_ema`, `state_transition_count`.
+### 10.1 Simulator (ground truth)
 
-### 10.2 Runtime behavior (important)
+| Piece | Role |
+|-------|------|
+| `layer1.py` | Mechanistic PK/PD, receptor occupancy, response, toxicity accumulation |
+| `layer2.py` | Stochastic noise, AE sampling, patient modifiers |
+| `layer3.py` | Policy: escalation, toxicity halts, non-response rules |
+| `loop.py` | Steps the world state each timestep |
+| `cohort.py` | Many patients, subgroup summaries (`age|renal|genotype`) |
+| `llm_compiler.py` | Builds `RuleTable` from PubMed / OpenFDA / DrugBank text (offline from the loop) |
+| `main.py` | CLI: CSV → rules → single run or cohort |
 
-- Inference runs require `OPENAI_API_KEY`.
-- Weak extraction is rejected by default (unless `--allow-weak-extraction` is explicitly passed).
-- On weak extraction failure, the CLI retries once with larger context windows.
-- Extraction quality is reported each run as `Extraction QC`:
-  - `confidence`
-  - `raw_null_fields`
-  - `postprocess_null_fields`
-  - `profile_fallback_applied`
-- For sparse metformin extraction, a metformin profile fallback is applied before final rule merge.
+**Runtime notes:** inference expects `OPENAI_API_KEY`; weak extraction is rejected by default; optional retry and extraction QC; drug-specific fallbacks when extraction is sparse.
 
-### 10.3 Quick start
+### 10.2 World model (learned transition model)
 
-```bash
-# Install dependencies
-pip install -e ".[dev]"
+The world model learns a function approximating **next state** from **current state + action + context**, using rows labeled by the simulator.
 
-# Run tests
-python -m pytest clinical_sim/tests -q
+| Path | Purpose |
+|------|---------|
+| `world_model/schema.py` | `StateVector`, `ActionVector`, `TransitionRecord` |
+| `world_model/interface.py` | Pluggable `WorldModel` protocol / minimal API contract |
+| `world_model/adapter.py` | `WorldState` ↔ vectors; inferred actions between steps |
+| `world_model/dataset.py` | `build_transition_dataset`, `transitions_to_rows` (`s_*`, `a_*`, `y_*`) |
+| `world_model/drug_rules.py` | Drug-conditioned `RuleTable` profiles for data generation |
+| `world_model/run_demo.py` | Inspect one drug’s transitions |
+| `world_model/generate_dataset.py` | Scaled multi-drug, multi-run CSV |
+| `world_model/train_baseline.py` | Random Forest regression on transition CSV → `artifacts/` |
+| `world_model/eval_rollout.py` | One-step and multi-step MAE vs labels |
 
-# Single-patient inference run
-PYTHONPATH=clinical_sim python clinical_sim/main.py --drug ibuprofen
+**Outputs:** CSV rows with `s_*` (state), `a_*` (action), `y_*` (next state), plus `drug_id`, covariates, `run_id`, `timestep`. Trained artifacts: `world_model/artifacts/world_model_rf.joblib` and `world_model_meta.json`.
 
-# Cohort run
-PYTHONPATH=clinical_sim python clinical_sim/main.py --drug metformin --cohort-size 50 --cohort-seed 7
+### 10.3 Input matching (CSV sources for LLM)
 
-# Engine-only dry run (no inference validity)
-PYTHONPATH=clinical_sim python clinical_sim/main.py --drug silicea --allow-dry-run
-```
+Defaults: `data/processed/openfda_v1.csv`, `ncbi_data.csv`, `drugbank.csv`.
 
-### 10.4 High-signal environment settings
+- **NCBI / OpenFDA:** exact match, then word-boundary fallback (e.g. `metformin` vs `metformin hydrochloride`).
+- **DrugBank:** token / alias matching on `name`.
 
-```bash
-LLM_PUBMED_CHARS=2000
-LLM_OPENFDA_CHARS=2000
-LLM_DRUGBANK_CHARS=3000
-LLM_MAX_NULL_FIELDS=10
-LLM_PROFILE_FALLBACK_NULL_FIELDS=10
-```
+### 10.4 Tests
 
-Use `LLM_TOTAL_SOURCE_CHARS` if you prefer one combined budget split across all three sources.
-
-### 10.5 Input matching rules
-
-Defaults are `data/processed/openfda_v1.csv`, `data/processed/ncbi_data.csv`, `data/processed/drugbank.csv` (overridable by flags).
-
-- **NCBI/OpenFDA:** exact match first, then word-boundary fallback (e.g., `metformin` matches `metformin hydrochloride`).
-- **DrugBank:** token/alias-based matching on `name` with safe boundary matching.
-
-### 10.6 Current test coverage snapshot
-
-- `39 passed, 1 skipped` in `clinical_sim/tests`.
-- `test_phase7.py`: world-state progression + cohort summaries.
-- `test_llm_priors.py`: toxicity priors and guardrails.
-- `test_llm_fallback.py`: sparse-extraction profile fallback behavior.
+Run `python -m pytest clinical_sim/tests -q`. Coverage includes phase tests, LLM priors/fallback, world-model dataset and pipeline tests (`test_world_model_*.py`).

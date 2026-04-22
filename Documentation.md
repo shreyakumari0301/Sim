@@ -22,6 +22,39 @@ Current scope includes:
 - Multi-layer trial simulation over timesteps.
 - Quality checks through tests and run manifests.
 
+## II-A. Clinical Simulation + World Model — System Overview
+
+This project implements a **hybrid clinical simulation framework** that combines LLM-based knowledge extraction, a mechanistic simulator, and (optionally) a **learned world model** trained on simulator-generated data. The overall goal is to model clinical progression as a **state transition problem**: the next patient state depends on the current state, treatment action, and context (drug parameters, patient covariates). Formally, the system targets approximations of
+
+\[
+s_{t+1} = f(s_t, a_t, \text{context}),
+\]
+
+so that both **faithful simulation** and **faster predictive rollouts** are possible.
+
+**LLM extraction.** At the front of the pipeline, an LLM converts unstructured biomedical evidence (PubMed, OpenFDA labeling context, DrugBank) into structured parameters. Sources are truncated to controlled lengths (`LLM_*_CHARS` / `LLM_TOTAL_SOURCE_CHARS`) before prompting. The model returns JSON aligned with the `RuleTable` schema (half-life, efficacy bounds, toxicity, response thresholds, trial-control fields, and a short `source_summary`). The implementation rejects weak extractions by default, can retry once with larger context, applies pharmacology priors and calibration guardrails, and uses sparse-extraction profile fallbacks when needed—so runs aim for **high-confidence parameters**, not silent generic defaults.
+
+**RuleTable and drug-specific behavior.** Extracted parameters consolidate into a **RuleTable** that defines PK/PD-style behavior inside the simulator: persistence (half-life), binding proxy (`kd`), maximum effect (`emax`), pathway suppression, toxicity accumulation, adverse-event sampling, and policy thresholds. Different drugs (and different successful extractions) yield different RuleTables and therefore different trajectories.
+
+**Mechanistic simulator as ground truth.** The simulator advances a typed **world state** over discrete timesteps: concentrations, AUC, biomarkers, receptor occupancy, pathway activity, clinical response, symptoms, toxicity, tolerance, treatment status, and meta signals (`response_ema`, `toxicity_ema`, transitions). Actions are inferred from policy effects (e.g., dose change, stop). Given `RuleTable` parameters, the layers produce trajectories used both for cohort metrics and for supervised learning.
+
+**Transition dataset for learning.** Code under `clinical_sim/world_model/` builds **supervised transition rows** from simulator rollouts: state features (`s_*`), inferred actions (`a_*`), and next-state labels (`y_*`). This dataset can be exported (e.g., CSV) to train a world model that approximates the simulator’s transition function—in practice often via **state deltas** \(\Delta s = s_{t+1} - s_t\) for stability. A trained model can support faster rollouts, counterfactuals, and policy search; uncertainty estimates can trigger **fallback to the full simulator** when predictions are unreliable.
+
+**World-model modules.** The current `clinical_sim/world_model/` package includes:
+- `schema.py` (typed transition records),
+- `interface.py` (world-model API/protocol),
+- `adapter.py` (state/action vectorization),
+- `dataset.py` (transition row builders),
+- `drug_rules.py` (drug-specific RuleTable profiles),
+- `run_demo.py` (single-drug transition demo),
+- `generate_dataset.py` (scaled multi-drug dataset generation),
+- `train_baseline.py` (baseline model training),
+- `eval_rollout.py` (one-step and rollout evaluation).
+
+**Outputs.** The stack currently exposes cohort-level summaries (mean response, severe AE rate, drug activity rate, subgroup strata) and, separately, transition tables for ML. The design is **synthetic-ground-truth today** (simulator-as-teacher), with a clear path to incorporate real-world outcomes for calibration and validation later.
+
+Overall, this is a **layered AI–mechanistic** design: knowledge extraction → structured rules → ground-truth dynamics → learned transition model—usable as an early **digital twin–style** foundation for trial strategy experimentation, subject to the limitations in Section VII.
+
 ## III. Implemented Architecture
 The architecture has two integrated blocks: a data pipeline and a simulation engine.
 

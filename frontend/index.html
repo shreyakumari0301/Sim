@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SIM — clinical sim dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #0f1115;
+        --card: #171b22;
+        --border: #2a3140;
+        --text: #e8ecf1;
+        --muted: #9aa3b2;
+        --accent: #5b8cff;
+      }
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.45;
+      }
+      header {
+        padding: 1.25rem 1.5rem;
+        border-bottom: 1px solid var(--border);
+        background: #12151c;
+      }
+      h1 {
+        margin: 0;
+        font-size: 1.15rem;
+        font-weight: 600;
+      }
+      p.sub {
+        margin: 0.35rem 0 0;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+      main {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 1.25rem 1.5rem 2.5rem;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 0.75rem 1rem;
+      }
+      label {
+        display: block;
+        font-size: 0.8rem;
+        color: var(--muted);
+        margin-bottom: 0.2rem;
+      }
+      input,
+      select {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 0.45rem 0.5rem;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: #0c0e12;
+        color: var(--text);
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: center;
+        margin-top: 0.75rem;
+      }
+      button {
+        background: var(--accent);
+        color: #0a0c10;
+        border: none;
+        padding: 0.55rem 1.1rem;
+        border-radius: 8px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      section {
+        margin-top: 1.5rem;
+        padding: 1rem 1.1rem;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+      }
+      section h2 {
+        margin: 0 0 0.6rem;
+        font-size: 1rem;
+        font-weight: 600;
+      }
+      pre {
+        margin: 0;
+        padding: 0.75rem;
+        background: #0c0e12;
+        border-radius: 8px;
+        overflow: auto;
+        max-height: 320px;
+        font-size: 0.78rem;
+        border: 1px solid var(--border);
+      }
+      .err {
+        color: #ff8a8a;
+        font-size: 0.9rem;
+      }
+      .charts {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 1rem;
+      }
+      @media (min-width: 880px) {
+        .charts {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+      canvas {
+        max-height: 260px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>SIM clinical simulation — local dashboard</h1>
+      <p class="sub">
+        Order: inputs → LLM / merged rules → typed world state snapshots → world-model step (if
+        artifacts exist) → trajectory charts.
+      </p>
+    </header>
+    <main>
+      <section>
+        <h2>Inputs</h2>
+        <div class="grid">
+          <div>
+            <label for="drug">Drug label (for bundles + ML id)</label>
+            <input id="drug" value="metformin" autocomplete="off" />
+          </div>
+          <div>
+            <label for="timesteps">Timesteps</label>
+            <input id="timesteps" type="number" min="5" max="500" value="60" />
+          </div>
+          <div>
+            <label for="seed">RNG seed (layer2 noise)</label>
+            <input id="seed" type="number" value="42" />
+          </div>
+          <div>
+            <label for="dose">Initial dose (mg)</label>
+            <input id="dose" type="number" min="0" value="200" />
+          </div>
+          <div>
+            <label for="age">Patient age</label>
+            <input id="age" type="number" min="18" value="58" />
+          </div>
+          <div>
+            <label for="renal">Renal function [0–1]</label>
+            <input id="renal" type="number" step="0.05" min="0" max="1" value="0.9" />
+          </div>
+        </div>
+        <div class="row">
+          <label style="display: flex; align-items: center; gap: 0.4rem; margin: 0; cursor: pointer">
+            <input id="use_llm" type="checkbox" />
+            <span>Call live LLM (needs <code>OPENAI_API_KEY</code> + processed CSVs)</span>
+          </label>
+        </div>
+        <div class="row">
+          <button id="run">Run pipeline</button>
+          <span id="status" class="muted"></span>
+        </div>
+        <p id="error" class="err" hidden></p>
+      </section>
+
+      <section>
+        <h2>1. LLM / merged rules</h2>
+        <pre id="llm_out">{}</pre>
+      </section>
+
+      <section>
+        <h2>2. World state (<code>WorldState</code>)</h2>
+        <p class="sub" style="margin-top: 0">
+          Full typed patient + drug + biomarker + toxicity + treatment + <code>SimulationMeta</code>
+          (<code>clinical_sim/state.py</code>). Shown: initial, midpoint, final JSON snapshots.
+        </p>
+        <pre id="world_state">{}</pre>
+      </section>
+
+      <section>
+        <h2>3. World model (one-step)</h2>
+        <p class="sub" style="margin-top: 0">
+          If <code>clinical_sim/world_model/artifacts/</code> contains a trained RF + meta JSON,
+          predicts next state features vs simulator ground truth at a fixed step.
+        </p>
+        <pre id="wm_out">{}</pre>
+      </section>
+
+      <section>
+        <h2>4. Trajectory charts</h2>
+        <div class="charts">
+          <div><canvas id="ch_response"></canvas></div>
+          <div><canvas id="ch_conc"></canvas></div>
+        </div>
+      </section>
+    </main>
+    <script>
+      let chartResp;
+      let chartConc;
+
+      function setJson(el, obj) {
+        el.textContent = JSON.stringify(obj, null, 2);
+      }
+
+      document.getElementById("run").addEventListener("click", async () => {
+        const btn = document.getElementById("run");
+        const errEl = document.getElementById("error");
+        const status = document.getElementById("status");
+        errEl.hidden = true;
+        btn.disabled = true;
+        status.textContent = "Running…";
+
+        const body = {
+          drug: document.getElementById("drug").value.trim() || "metformin",
+          timesteps: Number(document.getElementById("timesteps").value),
+          rng_seed: Number(document.getElementById("seed").value),
+          dose_level: Number(document.getElementById("dose").value),
+          age: Number(document.getElementById("age").value),
+          renal_function: Number(document.getElementById("renal").value),
+          use_llm: document.getElementById("use_llm").checked,
+        };
+
+        try {
+          const res = await fetch("/api/run", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            throw new Error(data.detail || res.statusText || "Request failed");
+          }
+          setJson(document.getElementById("llm_out"), data.llm || {});
+          setJson(document.getElementById("world_state"), data.world_state || {});
+          setJson(document.getElementById("wm_out"), data.world_model || {});
+
+          const traj = data.trajectory || [];
+          const labels = traj.map((r) => r.t);
+          const responses = traj.map((r) => r.clinical_response);
+          const conc = traj.map((r) => r.plasma_conc);
+
+          if (chartResp) chartResp.destroy();
+          if (chartConc) chartConc.destroy();
+
+          chartResp = new Chart(document.getElementById("ch_response"), {
+            type: "line",
+            data: {
+              labels,
+              datasets: [
+                {
+                  label: "Clinical response",
+                  data: responses,
+                  borderColor: "#5b8cff",
+                  tension: 0.15,
+                  pointRadius: 0,
+                },
+                {
+                  label: "Response EMA",
+                  data: traj.map((r) => r.response_ema),
+                  borderColor: "#7ae7c7",
+                  tension: 0.15,
+                  pointRadius: 0,
+                },
+              ],
+            },
+            options: {
+              responsive: true,
+              plugins: { legend: { labels: { color: "#c8d0da" } } },
+              scales: {
+                x: { ticks: { color: "#9aa3b2" }, grid: { color: "#2a3140" } },
+                y: { ticks: { color: "#9aa3b2" }, grid: { color: "#2a3140" } },
+              },
+            },
+          });
+
+          chartConc = new Chart(document.getElementById("ch_conc"), {
+            type: "line",
+            data: {
+              labels,
+              datasets: [
+                {
+                  label: "Plasma conc",
+                  data: conc,
+                  borderColor: "#ffb86b",
+                  tension: 0.15,
+                  pointRadius: 0,
+                },
+                {
+                  label: "Dose level",
+                  data: traj.map((r) => r.dose_level),
+                  borderColor: "#bd93f9",
+                  tension: 0.15,
+                  pointRadius: 0,
+                },
+              ],
+            },
+            options: {
+              responsive: true,
+              plugins: { legend: { labels: { color: "#c8d0da" } } },
+              scales: {
+                x: { ticks: { color: "#9aa3b2" }, grid: { color: "#2a3140" } },
+                y: { ticks: { color: "#9aa3b2" }, grid: { color: "#2a3140" } },
+              },
+            },
+          });
+
+          status.textContent = "Done.";
+        } catch (e) {
+          errEl.textContent = String(e.message || e);
+          errEl.hidden = false;
+          status.textContent = "";
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
