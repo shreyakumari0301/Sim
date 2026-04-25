@@ -107,18 +107,16 @@ def main() -> None:
     st.title("A/B Scenario Compare (Fixed Drug)")
     st.caption("Run exactly two scenarios and compare: response, ae_severity, toxicity_ema, drug_active.")
 
-    env_api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     api_key_input = st.text_input(
         "OpenAI API Key",
-        value=env_api_key,
+        value="",
         type="password",
-        help="Used for LLM rule compilation. Leave blank only if OPENAI_API_KEY is already set.",
+        help="Paste key and it will be applied for this run.",
     ).strip()
-    if api_key_input:
-        os.environ["OPENAI_API_KEY"] = api_key_input
-    if not os.environ.get("OPENAI_API_KEY", "").strip():
-        st.error("OPENAI_API_KEY is required. Set it in environment or enter it above.")
+    if not api_key_input:
+        st.error("OPENAI_API_KEY is required. Paste it above.")
         st.stop()
+    os.environ["OPENAI_API_KEY"] = api_key_input
 
     drug = st.text_input("Drug (fixed for A and B)", value="metformin").strip()
     timesteps = st.number_input("Timesteps", min_value=7, max_value=365, value=90, step=1)
