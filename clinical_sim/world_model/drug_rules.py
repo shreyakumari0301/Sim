@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from rule_tables import RuleTable
@@ -63,7 +64,15 @@ def drug_rule_table(drug: str) -> dict[str, Any]:
 
 
 def drug_id_for_name(drug: str) -> float:
-    """Stable numeric id for one-hot-style features in ML."""
-    m = {name: float(i) for i, name in enumerate(DEFAULT_DRUGS)}
+    """
+    Stable numeric id for any drug name (splits, features, no collision on -1 bucket).
+
+    Previously only DEFAULT_DRUGS had distinct ids; everything else mapped to -1.0,
+    which breaks drug-level train/test splits when generating many names.
+    """
     key = drug.strip().casefold()
-    return m.get(key, -1.0)
+    if not key:
+        return 0.0
+    digest = hashlib.sha256(key.encode("utf-8")).digest()
+    u = int.from_bytes(digest[:8], "big") % (2**52)
+    return float(u)

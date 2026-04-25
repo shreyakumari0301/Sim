@@ -50,17 +50,20 @@ def test_train_and_eval_smoke(tmp_path: Path) -> None:
         csv_path=csv_path,
         out_dir=model_dir,
         test_fraction=0.25,
+        val_fraction=0.25,
         seed=7,
         n_estimators=20,
         max_depth=8,
     )
     assert meta["test_mae_mean"] >= 0.0
+    assert "test_normalized_mae_mean" in meta
     assert (model_dir / "world_model_meta.json").is_file()
 
     from world_model.eval_rollout import evaluate
 
     ev = evaluate(csv_path=csv_path, model_dir=model_dir, max_horizon=5)
     assert "one_step_mean_mae" in ev
+    assert "one_step_normalized_mae" in ev
     assert ev["n_runs_evaluated"] >= 1
 
     raw = json.loads((model_dir / "world_model_meta.json").read_text(encoding="utf-8"))

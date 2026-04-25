@@ -1,6 +1,12 @@
 from pathlib import Path
 
-from csv_bundle import build_text_bundle, drugbank_text_for_drug, openfda_text_for_drug, pubmed_text_for_drug
+from csv_bundle import (
+    build_text_bundle,
+    drugbank_text_for_drug,
+    list_openfda_drugs_with_nonempty_triple_evidence,
+    openfda_text_for_drug,
+    pubmed_text_for_drug,
+)
 
 
 def test_build_text_bundle_matches_drug(tmp_path: Path) -> None:
@@ -152,3 +158,35 @@ def test_drugbank_id_env_override(tmp_path: Path, monkeypatch) -> None:
     text = drugbank_text_for_drug(db, "metformin")  # name would not match; ID drives selection
     assert "DBX" in text and "From env" in text
     monkeypatch.delenv("DRUGBANK_ID", raising=False)
+
+
+def test_list_openfda_drugs_with_nonempty_triple_evidence(tmp_path: Path) -> None:
+    """Only drugs with non-empty NCBI + OpenFDA + DrugBank blobs appear."""
+    ncbi = tmp_path / "ncbi_data.csv"
+    ncbi.write_text(
+        "pmid,title,abstract,authors,journal,pub_date,doi,drug_name\n"
+        "1,T,A,,,,,metformin\n"
+        "2,T2,A2,,,,,aspirin\n",
+        encoding="utf-8",
+    )
+    openfda = tmp_path / "openfda_v1.csv"
+    openfda.write_text(
+        "drug_name_clean,warnings,mechanism_of_action\n"
+        "metformin,Lactic acidosis risk.,Biguanide.\n"
+        "no_pubmed_row,,Has text.\n"
+        "aspirin,Bleeding.,COX inhibition.\n",
+        encoding="utf-8",
+    )
+    db = tmp_path / "drugbank.csv"
+    db.write_text(
+        "drug_id,secondary_ids,name,type,description,indication,state,cas,status,targets,interactions\n"
+        "DB1,,Metformin,small molecule,Antihyperglycemic.,,,,,,\n"
+        "DB2,,Aspirin,small molecule,NSAID.,,,,,,\n",
+        encoding="utf-8",
+    )
+    names = list_openfda_drugs_with_nonempty_triple_evidence(
+        openfda_csv=openfda,
+        ncbi_csv=ncbi,
+        drugbank_csv=db,
+    )
+    assert names == ["metformin", "aspirin"]

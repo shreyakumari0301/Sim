@@ -37,7 +37,10 @@ def apply_layer1(state: WorldState, rule_tables: dict) -> WorldState:
     tol = state.tolerance.model_copy()
 
     # ── 1a. PK decay ──────────────────────────────────────────────
-    k_elim = math.log(2) / rt["half_life"]
+    # Renal function modulates effective elimination for mostly renal-cleared drugs.
+    # 1.0 -> baseline elimination; lower renal function slows clearance.
+    renal_scale = max(0.2, min(1.5, 0.5 + 0.5 * state.patient.renal_function))
+    k_elim = (math.log(2) / rt["half_life"]) * renal_scale
     drug.plasma_conc = drug.plasma_conc * math.exp(-k_elim * TIMESTEP_HOURS)
     drug.tissue_conc = drug.plasma_conc * 0.6  # simplified tissue distribution
 
@@ -53,7 +56,7 @@ def apply_layer1(state: WorldState, rule_tables: dict) -> WorldState:
     )
 
     # ── 1b. Receptor occupancy (Hill equation) ────────────────────
-    bm.receptor_occupancy = _hill(drug.plasma_conc, rt["kd"]) * tol.receptor_density
+    bm.receptor_occupancy = _hill(drug.plasma_conc, rt["kd"], rt.get("hill_n", 1.0)) * tol.receptor_density
 
     # ── 1c. Pathway activity suppression ─────────────────────────
     suppression = bm.receptor_occupancy * rt["pathway_suppression"]
@@ -79,9 +82,12 @@ def apply_layer1(state: WorldState, rule_tables: dict) -> WorldState:
 
     # ── 1g. Toxicity accumulation ─────────────────────────────────
     if state.treatment.drug_active:
-        tox_increment = rt["tox_rate"] * bm.receptor_occupancy
+        # Reduced renal function increases drug accumulation-related toxicity pressure.
+        renal_tox_factor = 1.0 + max(0.0, 1.0 - state.patient.renal_function) * 0.6
+        tox_increment = rt["tox_rate"] * bm.receptor_occupancy * renal_tox_factor
         tox.cumulative_tox += tox_increment
-        tox.ae_severity = _tox_grade(tox.cumulative_tox)
+        # Baseline severity from cumulative toxicity; stochastic layer can transiently raise this.
+        tox.ae_severity = max(tox.ae_severity, _tox_grade(tox.cumulative_tox))
 
     # ── 1h. Tolerance accumulation ────────────────────────────────
     if drug.cumulative_auc > rt["tolerance_threshold"] and state.treatment.drug_active:
@@ -100,11 +106,14 @@ def apply_layer1(state: WorldState, rule_tables: dict) -> WorldState:
     return state.copy_updated(drug=drug, biomarkers=bm, effects=eff, toxicity=tox, tolerance=tol)
 
 
-def _hill(conc: float, kd: float) -> float:
-    """Hill equation: fraction saturation = C / (C + Kd)"""
+def _hill(conc: float, kd: float, hill_n: float = 1.0) -> float:
+    """Hill equation: fraction saturation = C^n / (C^n + Kd^n)."""
     if conc <= 0:
         return 0.0
-    return conc / (conc + kd)
+    n = max(0.5, float(hill_n))
+    c_n = conc**n
+    kd_n = max(1e-9, kd**n)
+    return c_n / (c_n + kd_n)
 
 
 def _bioavailability(patient) -> float:
@@ -114,13 +123,13 @@ def _bioavailability(patient) -> float:
 
 def _tox_grade(cumulative_tox: float) -> int:
     """Map cumulative toxicity to CTCAE grade 0-4."""
-    if cumulative_tox < 1.0:
+    if cumulative_tox < 2.0:
         return 0
-    if cumulative_tox < 3.0:
+    if cumulative_tox < 5.0:
         return 1
-    if cumulative_tox < 6.0:
+    if cumulative_tox < 9.0:
         return 2
-    if cumulative_tox < 10.0:
+    if cumulative_tox < 14.0:
         return 3
     return 4
 

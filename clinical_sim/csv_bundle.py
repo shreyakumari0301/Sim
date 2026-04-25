@@ -254,15 +254,28 @@ def _is_empty_cell(val: str) -> bool:
     return False
 
 
+def _load_csv_rows(path: Path) -> list[dict[str, str]]:
+    if not path.is_file():
+        return []
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f))
+
+
 def pubmed_text_for_drug(
     ncbi_csv: Path,
     drug: str,
     *,
     max_rows: int | None = None,
     max_chars: int = 24_000,
+    _rows: list[dict[str, str]] | None = None,
 ) -> str:
     """Build PubMed context from ncbi_data.csv (exact + word-boundary ``drug_name`` matching)."""
-    if not ncbi_csv.is_file():
+    if _rows is None:
+        if not ncbi_csv.is_file():
+            return ""
+        with ncbi_csv.open(encoding="utf-8-sig", newline="") as f:
+            _rows = list(csv.DictReader(f))
+    if not _rows:
         return ""
 
     if max_rows is None:
@@ -273,24 +286,20 @@ def pubmed_text_for_drug(
     drug_n = _norm(drug)
     chunks: list[str] = []
     n = 0
-    with ncbi_csv.open(encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        if not reader.fieldnames:
-            return ""
-        for row in reader:
-            if not _matches_query_value(_row_get(row, "drug_name"), drug_n):
-                continue
-            lines: list[str] = []
-            for col in NCBI_COLUMNS:
-                val = _row_get(row, col)
-                if not _is_empty_cell(val):
-                    lines.append(f"{col}: {val}")
-            block = "\n".join(lines)
-            if block:
-                chunks.append(block)
-            n += 1
-            if n >= max_rows:
-                break
+    for row in _rows:
+        if not _matches_query_value(_row_get(row, "drug_name"), drug_n):
+            continue
+        lines: list[str] = []
+        for col in NCBI_COLUMNS:
+            val = _row_get(row, col)
+            if not _is_empty_cell(val):
+                lines.append(f"{col}: {val}")
+        block = "\n".join(lines)
+        if block:
+            chunks.append(block)
+        n += 1
+        if n >= max_rows:
+            break
 
     return "\n\n---\n\n".join(chunks)[:max_chars]
 
@@ -301,9 +310,14 @@ def openfda_text_for_drug(
     *,
     max_chars: int = 24_000,
     priority_only: bool | None = None,
+    _rows: list[dict[str, str]] | None = None,
 ) -> str:
     """Join OpenFDA columns for the first row where ``drug_name_clean`` matches (exact + word boundary)."""
-    if not openfda_csv.is_file():
+    if _rows is None:
+        if not openfda_csv.is_file():
+            return ""
+        _rows = _load_csv_rows(openfda_csv)
+    if not _rows:
         return ""
 
     if priority_only is None:
@@ -315,17 +329,15 @@ def openfda_text_for_drug(
 
     drug_n = _norm(drug)
     cols = OPENFDA_PRIORITY_COLUMNS if priority_only else OPENFDA_COLUMNS
-    with openfda_csv.open(encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            if not _matches_query_value(_row_get(row, "drug_name_clean"), drug_n):
-                continue
-            parts: list[str] = []
-            for col in cols:
-                val = _row_get(row, col)
-                if not _is_empty_cell(val):
-                    parts.append(f"{col}: {val}")
-            return "\n".join(parts)[:max_chars]
+    for row in _rows:
+        if not _matches_query_value(_row_get(row, "drug_name_clean"), drug_n):
+            continue
+        parts: list[str] = []
+        for col in cols:
+            val = _row_get(row, col)
+            if not _is_empty_cell(val):
+                parts.append(f"{col}: {val}")
+        return "\n".join(parts)[:max_chars]
 
     return ""
 
@@ -345,43 +357,126 @@ def drugbank_text_for_drug(
     *,
     drugbank_id: str | None = None,
     max_chars: int = 24_000,
+    _rows: list[dict[str, str]] | None = None,
 ) -> str:
     """Join DrugBank columns for the best row: prefer ``drugbank_id`` when set, else richest ``name`` match."""
-    if not drugbank_csv.is_file():
+    if _rows is None:
+        if not drugbank_csv.is_file():
+            return ""
+        _rows = _load_csv_rows(drugbank_csv)
+    if not _rows:
         return ""
 
     want_id = _optional_drugbank_id(drugbank_id)
     if want_id:
         best_text = ""
         best_len = -1
-        with drugbank_csv.open(encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if _row_get(row, "drug_id").strip() != want_id:
-                    continue
-                block = _drugbank_row_to_text(row)
-                if len(block) > best_len:
-                    best_len = len(block)
-                    best_text = block
+        for row in _rows:
+            if _row_get(row, "drug_id").strip() != want_id:
+                continue
+            block = _drugbank_row_to_text(row)
+            if len(block) > best_len:
+                best_len = len(block)
+                best_text = block
         if best_text:
             return best_text[:max_chars]
 
     query = _drugbank_match_tokens(drug)
     best_text = ""
     best_len = -1
-    with drugbank_csv.open(encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            name = _row_get(row, "name")
-            desc = _row_get(row, "description")
-            if not _drugbank_row_matches_query(query, name, desc):
-                continue
-            block = _drugbank_row_to_text(row)
-            if len(block) > best_len:
-                best_len = len(block)
-                best_text = block
+    for row in _rows:
+        name = _row_get(row, "name")
+        desc = _row_get(row, "description")
+        if not _drugbank_row_matches_query(query, name, desc):
+            continue
+        block = _drugbank_row_to_text(row)
+        if len(block) > best_len:
+            best_len = len(block)
+            best_text = block
 
     return best_text[:max_chars] if best_text else ""
+
+
+def drug_has_nonempty_triple_evidence(
+    drug: str,
+    *,
+    openfda_csv: Path,
+    ncbi_csv: Path,
+    drugbank_csv: Path,
+    ncbi_rows: list[dict[str, str]],
+    openfda_rows: list[dict[str, str]],
+    drugbank_rows: list[dict[str, str]],
+    pubmed_max_rows: int | None = None,
+    openfda_priority_only: bool | None = None,
+    drugbank_id: str | None = None,
+) -> bool:
+    """
+    True iff the same matching rules as ``build_text_bundle`` yield non-empty
+    PubMed (NCBI export), OpenFDA, and DrugBank text for ``drug``.
+    """
+    pm = pubmed_text_for_drug(
+        ncbi_csv, drug, max_rows=pubmed_max_rows, _rows=ncbi_rows
+    ).strip()
+    of = openfda_text_for_drug(
+        openfda_csv, drug, priority_only=openfda_priority_only, _rows=openfda_rows
+    ).strip()
+    db = drugbank_text_for_drug(
+        drugbank_csv, drug, drugbank_id=drugbank_id, _rows=drugbank_rows
+    ).strip()
+    return bool(pm and of and db)
+
+
+def list_openfda_drugs_with_nonempty_triple_evidence(
+    *,
+    openfda_csv: Path,
+    ncbi_csv: Path,
+    drugbank_csv: Path,
+    openfda_column: str = "drug_name_clean",
+    max_drugs: int | None = None,
+    pubmed_max_rows: int | None = None,
+    openfda_priority_only: bool | None = None,
+) -> list[str]:
+    """
+    Unique ``openfda_column`` values from the OpenFDA CSV (first-seen order) for which
+    NCBI (PubMed export), OpenFDA label, and DrugBank all produce non-empty blobs.
+    """
+    openfda_rows = _load_csv_rows(openfda_csv)
+    if not openfda_rows:
+        return []
+    fields = set(openfda_rows[0].keys())
+    if openfda_column not in fields:
+        raise ValueError(
+            f"column {openfda_column!r} not in OpenFDA CSV fields: {sorted(fields)!r}"
+        )
+
+    ncbi_rows = _load_csv_rows(ncbi_csv)
+    drugbank_rows = _load_csv_rows(drugbank_csv)
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for row in openfda_rows:
+        raw = (row.get(openfda_column) or "").strip()
+        if not raw:
+            continue
+        key = raw.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        if drug_has_nonempty_triple_evidence(
+            raw,
+            openfda_csv=openfda_csv,
+            ncbi_csv=ncbi_csv,
+            drugbank_csv=drugbank_csv,
+            ncbi_rows=ncbi_rows,
+            openfda_rows=openfda_rows,
+            drugbank_rows=drugbank_rows,
+            pubmed_max_rows=pubmed_max_rows,
+            openfda_priority_only=openfda_priority_only,
+        ):
+            out.append(raw)
+            if max_drugs is not None and len(out) >= max_drugs:
+                break
+    return out
 
 
 def build_text_bundle(

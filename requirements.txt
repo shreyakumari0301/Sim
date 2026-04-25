@@ -6,3 +6,5 @@ numpy,>=1.26,dev;clinical-sim
 openai,>=1.0,dev;clinical-sim
 pytest,>=8.0,dev
 ruff,>=0.4,dev
+streamlit>=1.44
+

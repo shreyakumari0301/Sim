@@ -1,0 +1,72 @@
+% Initial methodology draft (NeurIPS / ICLR style).
+% Paste \input{methodology_draft} into the official template, or compile standalone
+% after uncommenting the preamble below.
+%
+% \documentclass{article}
+% \usepackage{amsmath,amssymb,bm}
+% \usepackage{microtype}
+% \usepackage{hyperref}
+% \begin{document}
+
+\section{Method}
+\label{sec:method}
+
+We describe \textsc{Sim}, a pipeline that ingests regulatory labels, literature, and curated drug records; compiles them offline into a structured simulator configuration; runs a layered discrete-time trial simulator; and optionally trains a supervised world model on simulator rollouts. The design treats the mechanistic simulator as ground truth for learning while keeping stochastic LLM calls outside the inner simulation loop.
+
+\subsection{Problem formulation}
+We model patient--trial dynamics as a controlled Markov process over a typed state $s_t$, action $a_t$ (e.g., dose change, stop), and static context $c$ (drug identity, covariates). We target transitions
+\begin{equation}
+  s_{t+1} = f(s_t, a_t, c),
+\end{equation}
+where $f$ is instantiated either by a hand-specified simulator (Section~\ref{sec:sim}) or by a learned surrogate $\hat{f}$ fit to tuples $(s_t,a_t,s_{t+1})$ (Section~\ref{sec:wm}).
+
+\subsection{Multi-source evidence integration}
+\label{sec:data}
+
+\paragraph{OpenFDA.}
+We fetch paginated \texttt{drug/label} JSON from the openFDA API, persist raw JSONL for audit, flatten nested fields, drop extremely sparse columns, and construct a canonical string field \texttt{drug\_name\_clean} by preferring generic name, then brand, substance, or active ingredient, with normalization and token filtering. Multi-ingredient strings are exploded to one row per ingredient for downstream retrieval.
+
+\paragraph{PubMed (NCBI Entrez).}
+For each distinct \texttt{drug\_name\_clean}, we issue PubMed queries combining a title/abstract drug term with pharmacology/toxicity/mechanism keywords and a publication-date window (configurable; our implementation defaults to 2020--2026). We call \texttt{esearch} with pagination, then batched \texttt{efetch} (XML by default), retaining raw pages in \texttt{pages.jsonl} and optionally emitting parsed one-article-per-line \texttt{records.jsonl} (title, abstract, identifiers, provenance pointers).
+
+\paragraph{DrugBank.}
+Under license, we stream-parse the full DrugBank XML with bounded memory, extracting identifiers, indications, flattened targets, and drug--drug interaction partners into tabular form for joining.
+
+\paragraph{Entity linking.}
+At simulation time, drug-scoped text is assembled by exact match on cleaned OpenFDA and NCBI tables, with word-boundary fallback for variants (e.g., salt forms), and token/alias match against DrugBank names.
+
+\subsection{Offline LLM compilation to structured rules}
+\label{sec:llm}
+
+Given a drug $d$, we build a text bundle from matched PubMed abstracts, OpenFDA labeling excerpts, and DrugBank fields. Each source is truncated to fixed character budgets before prompting. A frozen LLM is prompted to emit \emph{strict JSON} aligned to a fixed \texttt{RuleTable} schema (PK-style persistence, binding proxy, maximum effect, pathway suppression, toxicity and adverse-event parameters, response thresholds, and trial-control thresholds such as escalation and halt rules). Parsed JSON is validated and merged with defaults for missing keys.
+
+We apply three safeguards: (i) weak extractions (high missing-field rate) can be rejected in strict mode; (ii) a single automatic retry uses expanded context when the first parse is sparse; (iii) pharmacology priors, calibration guardrails, and class- or drug-specific profile fallbacks repair pathological parses when sources are thin. The LLM is never invoked inside the per-timestep simulator loop; compilation is a batch \emph{offline} step that yields a deterministic \texttt{RuleTable} for each drug.
+
+\subsection{Layered clinical simulator}
+\label{sec:sim}
+
+The simulator advances a world state at discrete timesteps.
+
+\paragraph{Layer~1 (mechanistic).}
+Updates concentrations (decay/absorption under half-life assumptions), receptor occupancy, pathway suppression and rebound, biomarker proxies, clinical response, and toxicity accumulation using Hill-type and thresholded dynamics parameterized by the \texttt{RuleTable}.
+
+\paragraph{Layer~2 (stochastic).}
+Adds patient heterogeneity and noise to response trajectories and samples adverse events from a categorical severity distribution with drug- and covariate-dependent rates.
+
+\paragraph{Layer~3 (policy).}
+Implements trial-control logic: dose escalation/de-escalation schedules, toxicity-driven halts, and non-response discontinuation against running efficacy summaries.
+
+\paragraph{Cohort execution.}
+We simulate independent patients (optionally stratified by age, renal function, genotype buckets) and aggregate safety and efficacy summaries.
+
+\subsection{World model training on simulator transitions}
+\label{sec:wm}
+
+We serialize rollouts into supervised rows with vectorized states $x^{(s)}_t$, inferred actions $x^{(a)}_t$, and next-state labels. During training, targets are converted to state deltas, $\Delta s_t = s_{t+1}-s_t$, for numerical stability. To test unseen-drug generalization, we split data at the \emph{drug level} into train/validation/test partitions, preventing leakage across runs of the same drug. Our baseline model is a multi-output random forest regressor with 200 trees that maps $(s_t,a_t)$ to $\Delta s_t$; the same interface supports replacing this with neural predictors.
+
+For evaluation, we report (i) one-step MAE and normalized MAE (per-dimension error scaled by train-set target standard deviation) on held-out drugs, and (ii) multi-step rollout divergence under fixed policies by recursively feeding predicted states forward while keeping recorded action/policy trajectories. Multi-step metrics are averaged over up to 10 runs (seeds) per held-out drug.
+
+\subsection{Reproducibility and software}
+Each ingest records JSON manifests (parameters, hashes, timestamps). HTTP clients use retries with backoff; settings are environment-backed. Automated tests cover URL construction, parsers, simulation phases, LLM fallback paths, and world-model dataset construction.
+
+% \end{document}

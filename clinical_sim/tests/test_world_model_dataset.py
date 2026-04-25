@@ -1,5 +1,13 @@
 from world_model.adapter import infer_action, state_to_vector
 from world_model.dataset import build_transition_dataset, transitions_to_rows
+from world_model.drug_rules import drug_id_for_name
+
+
+def test_drug_id_for_name_stable_and_distinct() -> None:
+    a = drug_id_for_name("metformin")
+    assert drug_id_for_name("metformin") == a
+    assert drug_id_for_name(" Metformin ") == a
+    assert drug_id_for_name("ibuprofen") != a
 
 
 def test_state_to_vector_smoke() -> None:
@@ -49,4 +57,4 @@ def test_build_transition_dataset_rows_match_timesteps() -> None:
     assert "s_clinical_response" in flat[0]
     assert "a_action_code" in flat[0]
     assert "y_clinical_response" in flat[0]
-    assert flat[0]["drug_id"] == 0.0
+    assert flat[0]["drug_id"] == drug_id_for_name("metformin")

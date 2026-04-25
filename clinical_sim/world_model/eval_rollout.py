@@ -45,17 +45,36 @@ def _rows_by_run(path: Path) -> dict[str, list[dict[str, str]]]:
     return dict(by_run)
 
 
-def _y_to_state_features(
-    y_vec: np.ndarray,
+def _target_scales(meta: dict[str, Any], target_cols: list[str]) -> np.ndarray:
+    raw = meta.get("target_scale_std", {})
+    vals = [float(raw.get(c, 1.0)) for c in target_cols]
+    arr = np.array(vals, dtype=np.float64)
+    return np.where(arr > 1e-8, arr, 1.0)
+
+
+def _state_from_row(row: dict[str, str], state_feature_cols: list[str]) -> dict[str, float]:
+    return {c: float(row[c]) for c in state_feature_cols}
+
+
+def _delta_truth_from_row(row: dict[str, str], target_cols: list[str]) -> np.ndarray:
+    vals = []
+    for y_col in target_cols:
+        suffix = y_col[2:]
+        vals.append(float(row[y_col]) - float(row[f"s_{suffix}"]))
+    return np.array(vals, dtype=np.float64)
+
+
+def _delta_to_state_features(
+    prev_state: dict[str, float],
+    delta_vec: np.ndarray,
     target_cols: list[str],
     state_feature_cols: list[str],
 ) -> dict[str, float]:
-    """Map predicted y_* vector back to s_* keys (same suffix after prefix)."""
-    suffix_map = {c[2:]: float(v) for c, v in zip(target_cols, y_vec)}
+    suffix_map = {c[2:]: float(v) for c, v in zip(target_cols, delta_vec)}
     out: dict[str, float] = {}
     for c in state_feature_cols:
-        suffix = c[2:]  # strip s_
-        out[c] = suffix_map.get(suffix, 0.0)
+        suffix = c[2:]
+        out[c] = prev_state.get(c, 0.0) + suffix_map.get(suffix, 0.0)
     return out
 
 
@@ -84,60 +103,84 @@ def evaluate(
     feature_cols: list[str] = meta["feature_cols"]
     target_cols: list[str] = meta["target_cols"]
     state_s_cols = [c for c in feature_cols if c.startswith("s_")]
+    test_drugs = set(meta.get("test_drugs", []))
+    scales = _target_scales(meta, target_cols)
 
     with csv_path.open(encoding="utf-8", newline="") as f:
         all_rows = list(csv.DictReader(f))
 
-    if all_rows:
+    eval_rows = [r for r in all_rows if not test_drugs or r["drug_id"] in test_drugs]
+    if eval_rows:
         X_all = np.array(
-            [[float(r[c]) for c in feature_cols] for r in all_rows], dtype=np.float64
+            [[float(r[c]) for c in feature_cols] for r in eval_rows], dtype=np.float64
         )
-        y_all = np.array(
-            [[float(r[c]) for c in target_cols] for r in all_rows], dtype=np.float64
+        y_delta_all = np.array(
+            [_delta_truth_from_row(r, target_cols) for r in eval_rows], dtype=np.float64
         )
         pred_all = model.predict(X_all)
-        one_step_mean_mae = float(np.mean(np.abs(pred_all - y_all)))
+        one_step_mean_mae = float(np.mean(np.abs(pred_all - y_delta_all)))
+        one_step_normalized_mae = float(np.mean(np.abs(pred_all - y_delta_all) / scales))
     else:
         one_step_mean_mae = 0.0
+        one_step_normalized_mae = 0.0
 
     by_run = _rows_by_run(csv_path)
-    rollout_errors: list[list[float]] = []
+    if test_drugs:
+        by_run = {
+            rid: rows for rid, rows in by_run.items() if rows and rows[0].get("drug_id", "") in test_drugs
+        }
 
-    for _run_id, traj in by_run.items():
-        if len(traj) < 2:
-            continue
-        ro_e: list[float] = []
-        y_prev_vec: np.ndarray | None = None
-        for k, row in enumerate(traj):
-            if k >= max_horizon:
-                break
-            if k == 0:
-                state_override = None
-            else:
-                assert y_prev_vec is not None
-                st = _y_to_state_features(y_prev_vec, target_cols, state_s_cols)
-                state_override = st
-            x = np.array([_build_X_row(row, state_override, feature_cols)], dtype=np.float64)
-            y_hat = model.predict(x)[0]
-            y_true = np.array([float(row[c]) for c in target_cols], dtype=np.float64)
-            err = float(np.mean(np.abs(y_hat - y_true)))
-            ro_e.append(err)
-            y_prev_vec = y_hat
-        if ro_e:
-            rollout_errors.append(ro_e)
+    by_drug_runs: dict[str, list[list[dict[str, str]]]] = defaultdict(list)
+    for traj in by_run.values():
+        if traj:
+            by_drug_runs[traj[0]["drug_id"]].append(traj)
+
+    rollout_norm_errors: list[list[float]] = []
+    seed_rollout_means: list[float] = []
+    n_seed_runs = 10
+
+    for _drug_id, trajectories in by_drug_runs.items():
+        selected = trajectories[:n_seed_runs]
+        for traj in selected:
+            if len(traj) < 2:
+                continue
+            ro_e: list[float] = []
+            prev_state = _state_from_row(traj[0], state_s_cols)
+            for k, row in enumerate(traj):
+                if k >= max_horizon:
+                    break
+                x = np.array([_build_X_row(row, prev_state, feature_cols)], dtype=np.float64)
+                y_hat_delta = model.predict(x)[0]
+                y_true_delta = _delta_truth_from_row(row, target_cols)
+                err_norm = float(np.mean(np.abs(y_hat_delta - y_true_delta) / scales))
+                ro_e.append(err_norm)
+                prev_state = _delta_to_state_features(prev_state, y_hat_delta, target_cols, state_s_cols)
+            if ro_e:
+                rollout_norm_errors.append(ro_e)
+                seed_rollout_means.append(float(np.mean(ro_e)))
 
     step_means = [
-        float(np.mean([r[i] for r in rollout_errors if len(r) > i]))
+        float(np.mean([r[i] for r in rollout_norm_errors if len(r) > i]))
         for i in range(max_horizon)
-        if any(len(r) > i for r in rollout_errors)
+        if any(len(r) > i for r in rollout_norm_errors)
     ]
-    rollout_mean = float(np.mean([e for run in rollout_errors for e in run])) if rollout_errors else 0.0
+    rollout_mean = (
+        float(np.mean([e for run in rollout_norm_errors for e in run]))
+        if rollout_norm_errors
+        else 0.0
+    )
+    rollout_seed_avg = float(np.mean(seed_rollout_means)) if seed_rollout_means else 0.0
 
     return {
         "one_step_mean_mae": one_step_mean_mae,
-        "rollout_mean_mae": rollout_mean,
-        "rollout_mean_mae_by_step": step_means,
-        "n_runs_evaluated": len(rollout_errors),
+        "one_step_normalized_mae": one_step_normalized_mae,
+        "rollout_mean_normalized_mae": rollout_mean,
+        "rollout_mean_normalized_mae_by_step": step_means,
+        "rollout_seed_averaged_normalized_mae": rollout_seed_avg,
+        "n_runs_evaluated": len(rollout_norm_errors),
+        "n_seed_runs_per_drug": n_seed_runs,
+        "drug_level_held_out_evaluation": bool(test_drugs),
+        "held_out_drug_ids": sorted(test_drugs),
     }
 
 

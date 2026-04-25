@@ -10,10 +10,64 @@ from typing import Any
 import numpy as np
 
 from cohort import _sample_patient
+from csv_bundle import list_openfda_drugs_with_nonempty_triple_evidence
 from rule_tables import RuleTable
 from state import Patient, Treatment, WorldState
 from world_model.dataset import build_transition_dataset, transitions_to_rows
 from world_model.drug_rules import DEFAULT_DRUGS, drug_rule_table
+
+
+def _repo_processed_csv(name: str) -> Path:
+    return Path(__file__).resolve().parents[2] / "data" / "processed" / name
+
+
+def load_drug_names_from_file(path: Path, *, max_drugs: int | None = None) -> list[str]:
+    """One drug name per line; `#` starts a comment; empty lines skipped; order preserved."""
+    text = path.read_text(encoding="utf-8")
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in text.splitlines():
+        v = line.split("#", 1)[0].strip()
+        if not v:
+            continue
+        k = v.casefold()
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(v)
+        if max_drugs is not None and len(out) >= max_drugs:
+            break
+    return out
+
+
+def load_drug_names_from_csv(
+    path: Path,
+    column: str,
+    *,
+    max_drugs: int | None = None,
+) -> list[str]:
+    """Unique non-empty values from `column` (first occurrence order)."""
+    with path.open(encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        fields = reader.fieldnames or []
+        if column not in fields:
+            raise ValueError(
+                f"column {column!r} not in CSV fields: {fields!r} (file {path})"
+            )
+        seen: set[str] = set()
+        out: list[str] = []
+        for row in reader:
+            raw = (row.get(column) or "").strip()
+            if not raw:
+                continue
+            k = raw.casefold()
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(raw)
+            if max_drugs is not None and len(out) >= max_drugs:
+                break
+    return out
 
 
 def _make_initial_state(
@@ -77,8 +131,62 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Generate scaled world-model transition CSV for training.")
     p.add_argument(
         "--drugs",
-        default=",".join(DEFAULT_DRUGS),
-        help="Comma-separated drug names (built-in profiles): metformin,amoxicillin,ibuprofen",
+        default=None,
+        help="Comma-separated drug names. Default: built-in demo list if no other drug source is set.",
+    )
+    p.add_argument(
+        "--drugs-file",
+        type=Path,
+        default=None,
+        help="Text file: one drug name per line (use for long lists).",
+    )
+    p.add_argument(
+        "--drugs-from-csv",
+        type=Path,
+        default=None,
+        help="CSV path; take unique drug names from --drugs-from-csv-column (e.g. openfda_v1.csv).",
+    )
+    p.add_argument(
+        "--drugs-from-csv-column",
+        default="drug_name_clean",
+        help="Column name when using --drugs-from-csv (default: drug_name_clean).",
+    )
+    p.add_argument(
+        "--max-drugs",
+        type=int,
+        default=None,
+        help="Cap how many distinct drugs to simulate (order: file/CSV order).",
+    )
+    p.add_argument(
+        "--require-triple-evidence",
+        action="store_true",
+        help=(
+            "Use only drugs whose names appear in OpenFDA and also have non-empty "
+            "NCBI (PubMed export), OpenFDA label, and DrugBank matches (same rules as csv_bundle / main.py)."
+        ),
+    )
+    p.add_argument(
+        "--openfda-csv",
+        type=Path,
+        default=_repo_processed_csv("openfda_v1.csv"),
+        help="OpenFDA table (used with --require-triple-evidence).",
+    )
+    p.add_argument(
+        "--ncbi-csv",
+        type=Path,
+        default=_repo_processed_csv("ncbi_data.csv"),
+        help="NCBI / PubMed export (used with --require-triple-evidence).",
+    )
+    p.add_argument(
+        "--drugbank-csv",
+        type=Path,
+        default=_repo_processed_csv("drugbank.csv"),
+        help="DrugBank export (used with --require-triple-evidence).",
+    )
+    p.add_argument(
+        "--triple-openfda-column",
+        default="drug_name_clean",
+        help="Column in OpenFDA CSV to enumerate candidate drug names (default: drug_name_clean).",
     )
     p.add_argument("--runs-per-drug", type=int, default=20, help="Simulated trajectories per drug.")
     p.add_argument("--timesteps", type=int, default=40, help="Timesteps per trajectory.")
@@ -96,8 +204,59 @@ def main(argv: list[str] | None = None) -> int:
         help="Ignore drug profiles; use one RuleTable for all (debug).",
     )
     args = p.parse_args(argv)
+    if args.max_drugs is not None and args.max_drugs < 1:
+        p.error("--max-drugs must be >= 1 when set")
 
-    drugs = [d.strip() for d in args.drugs.split(",") if d.strip()]
+    sources = [
+        args.require_triple_evidence,
+        args.drugs is not None,
+        args.drugs_file is not None,
+        args.drugs_from_csv is not None,
+    ]
+    if sum(bool(x) for x in sources) > 1:
+        p.error(
+            "use only one drug source: --require-triple-evidence OR "
+            "--drugs OR --drugs-file OR --drugs-from-csv"
+        )
+
+    if args.require_triple_evidence:
+        try:
+            drugs = list_openfda_drugs_with_nonempty_triple_evidence(
+                openfda_csv=args.openfda_csv,
+                ncbi_csv=args.ncbi_csv,
+                drugbank_csv=args.drugbank_csv,
+                openfda_column=args.triple_openfda_column,
+                max_drugs=args.max_drugs,
+            )
+        except ValueError as e:
+            p.error(str(e))
+    elif args.drugs_from_csv is not None:
+        drugs = load_drug_names_from_csv(
+            args.drugs_from_csv,
+            args.drugs_from_csv_column,
+            max_drugs=args.max_drugs,
+        )
+    elif args.drugs_file is not None:
+        drugs = load_drug_names_from_file(args.drugs_file, max_drugs=args.max_drugs)
+    elif args.drugs is not None:
+        drugs = [d.strip() for d in args.drugs.split(",") if d.strip()]
+    else:
+        drugs = list(DEFAULT_DRUGS)
+
+    if not drugs:
+        if args.require_triple_evidence:
+            p.error(
+                "no drugs passed triple-evidence filter; verify --openfda-csv, --ncbi-csv, "
+                "--drugbank-csv and that each source has matching non-empty rows"
+            )
+        p.error("no drug names resolved; check --drugs / --drugs-file / --drugs-from-csv")
+
+    if args.require_triple_evidence:
+        print(
+            f"require-triple-evidence: {len(drugs)} drug(s) with non-empty "
+            "OpenFDA + NCBI (PubMed export) + DrugBank matches"
+        )
+
     rows = generate_scaled_dataset(
         drugs=drugs,
         runs_per_drug=args.runs_per_drug,

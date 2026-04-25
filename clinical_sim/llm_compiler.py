@@ -211,6 +211,16 @@ def _apply_pharmacology_priors(
     if isinstance(halt, (int, float)):
         parsed["tox_halt_grade"] = max(int(halt), 3)
 
+    sev = parsed.get("ae_severity_weights")
+    if tox_class == "low" and isinstance(sev, list) and len(sev) == 5:
+        clipped = [max(0.0, float(x)) for x in sev]
+        # Keep severe grades rare for low-toxicity drugs like metformin.
+        clipped[3] = min(clipped[3], 0.02)
+        clipped[4] = min(clipped[4], 0.005)
+        total = sum(clipped)
+        if total > 0:
+            parsed["ae_severity_weights"] = [x / total for x in clipped]
+
 
 def _metformin_profile_defaults() -> dict[str, Any]:
     """Drug-sensitive fallback profile for metformin-like antihyperglycemics."""
@@ -233,7 +243,7 @@ def _metformin_profile_defaults() -> dict[str, Any]:
         "response_threshold": 0.04,
         "response_rate_alpha": 2.5,
         "response_rate_beta": 1.5,
-        "ae_severity_weights": [0.6, 0.25, 0.1, 0.04, 0.01],
+        "ae_severity_weights": [0.7, 0.2, 0.08, 0.015, 0.005],
         "noise_sd": 0.02,
         "tox_halt_grade": 3,
         "escalation_threshold": 0.3,

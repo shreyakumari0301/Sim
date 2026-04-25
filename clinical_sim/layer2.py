@@ -28,9 +28,13 @@ def apply_layer2(state: WorldState, rule_tables: dict) -> WorldState:
         ae_prob_adjusted = rt["ae_probability"] * (1.0 + state.toxicity.cumulative_tox * 0.05)
         if rng.random() < ae_prob_adjusted:
             grade = int(rng.choice([0, 1, 2, 3, 4], p=_normalise(rt["ae_severity_weights"])))
+            # Treat sampled AE as current-episode severity, not lifetime max severity.
             tox.ae_severity = max(tox.ae_severity, grade)
             if grade >= 2 and "sampled_ae" not in tox.ae_active:
                 tox.ae_active = tox.ae_active + ["sampled_ae"]
+        elif tox.ae_severity > 0:
+            # Allow severity to recover over time if no new AE is sampled.
+            tox.ae_severity = max(0, tox.ae_severity - 1)
 
     # ── 2d. Biomarker noise ───────────────────────────────────────
     bm.target_biomarker = float(max(0.0, bm.target_biomarker + rng.normal(0, rt["noise_sd"])))
