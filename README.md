@@ -210,17 +210,17 @@ The world model learns a function approximating **next state** from **current st
 
 | Path | Purpose |
 |------|---------|
-| `world_model/schema.py` | `StateVector`, `ActionVector`, `TransitionRecord` |
-| `world_model/interface.py` | Pluggable `WorldModel` protocol / minimal API contract |
-| `world_model/adapter.py` | `WorldState` ↔ vectors; inferred actions between steps |
-| `world_model/dataset.py` | `build_transition_dataset`, `transitions_to_rows` (`s_*`, `a_*`, `y_*`) |
-| `world_model/drug_rules.py` | Drug-conditioned `RuleTable` profiles for data generation |
-| `world_model/run_demo.py` | Inspect one drug’s transitions |
-| `world_model/generate_dataset.py` | Scaled multi-drug, multi-run CSV |
-| `world_model/train_baseline.py` | Random Forest regression on transition CSV → `artifacts/` |
-| `world_model/eval_rollout.py` | One-step and multi-step MAE vs labels |
+| `world_model/core.py` | Schemas, adapters, CSV/matrix helpers, bounds |
+| `world_model/data.py` | Drug rules + `build_transition_dataset` |
+| `world_model/predict.py` | RF load, baselines, grounded rollout |
+| `world_model/metrics.py` | Eval vs simulator labels |
+| `world_model/generate_dataset.py` | CLI: scaled CSV |
+| `world_model/train_baseline.py` | CLI: train RF → `artifacts/` |
+| `world_model/eval_compare.py` | CLI: B0–B3; `--ladder` |
 
-**Outputs:** CSV rows with `s_*` (state), `a_*` (action), `y_*` (next state), plus `drug_id`, covariates, `run_id`, `timestep`. Trained artifacts: `world_model/artifacts/world_model_rf.joblib` and `world_model_meta.json`.
+**Runtime:** `main.py` always runs a **grounded** WM block (predictions checked against simulator). See `clinical_sim/world_model/README.md`.
+
+**Outputs:** CSV with `s_*`, `a_*`, `y_*`; artifacts `world_model_rf.joblib`, `world_model_meta.json`.
 
 ### 10.3 Input matching (CSV sources for LLM)
 
@@ -231,4 +231,4 @@ Defaults: `data/processed/openfda_v1.csv`, `ncbi_data.csv`, `drugbank.csv`.
 
 ### 10.4 Tests
 
-Run `python -m pytest clinical_sim/tests -q`. Coverage includes phase tests, LLM priors/fallback, world-model dataset and pipeline tests (`test_world_model_*.py`).
+Run `python -m pytest clinical_sim/tests -q`. Coverage: `test_simulator.py`, LLM tests, `test_world_model_*.py`.

@@ -13,8 +13,7 @@ from cohort import _sample_patient
 from csv_bundle import list_openfda_drugs_with_nonempty_triple_evidence
 from rule_tables import RuleTable
 from state import Patient, Treatment, WorldState
-from world_model.dataset import build_transition_dataset, transitions_to_rows
-from world_model.drug_rules import DEFAULT_DRUGS, drug_rule_table
+from world_model.data import DEFAULT_DRUGS, build_transition_dataset, drug_rule_table, transitions_to_rows
 
 
 def _repo_processed_csv(name: str) -> Path:

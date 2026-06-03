@@ -334,6 +334,11 @@ def compile_rule_tables(
         return RuleTable(version="dry_run", source_summary="dry run — no API call")
 
     load_repo_dotenv()
+    if not os.environ.get("OPENAI_API_KEY", "").strip():
+        router_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+        if router_key:
+            os.environ["OPENAI_API_KEY"] = router_key
+            os.environ.setdefault("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
 
     from openai import OpenAI
 

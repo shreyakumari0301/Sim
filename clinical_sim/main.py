@@ -114,6 +114,18 @@ def main(argv: list[str] | None = None) -> int:
         default=7,
         help="Random seed used for cohort patient sampling (default: 7).",
     )
+    p.add_argument(
+        "--wm-artifacts",
+        type=Path,
+        default=None,
+        help="World model artifacts dir (default: clinical_sim/world_model/artifacts).",
+    )
+    p.add_argument(
+        "--wm-horizon",
+        type=int,
+        default=None,
+        help="Grounded WM rollout horizon (default: min(15, --timesteps)).",
+    )
     args = p.parse_args(argv)
 
     pubmed_text, openfda_text, drugbank_text = build_text_bundle(
@@ -217,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
     state = WorldState()
     state = state.copy_updated(patient=patient, treatment=treatment)
 
+    history = None
     if args.cohort_size > 1:
         out = run_cohort_simulation(
             initial_state=state,
@@ -233,6 +246,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  Drug active rate:{out['drug_active_rate']:.3f}")
         print("\nSubgroup summary (age|renal|genotype):")
         print(json.dumps(out["subgroup_summary"], indent=2))
+        print(
+            "\nNote: grounded world-model rollout runs in single-patient mode only; "
+            "cohort summary above is simulator-only.",
+            file=sys.stderr,
+        )
     else:
         history = run_simulation(
             initial_state=state,
@@ -251,6 +269,86 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  Response EMA:{final.meta.response_ema:.3f}")
         print(f"  Toxicity EMA:{final.meta.toxicity_ema:.3f}")
         print(f"  Transitions: {final.meta.state_transition_count}")
+
+        wm_code = _print_grounded_world_model(
+            history=history,
+            drug=args.drug,
+            wm_artifacts=args.wm_artifacts,
+            wm_horizon=args.wm_horizon,
+            timesteps=args.timesteps,
+        )
+        if wm_code != 0:
+            return wm_code
+    return 0
+
+
+def _print_grounded_world_model(
+    *,
+    history: list,
+    drug: str,
+    wm_artifacts: Path | None,
+    wm_horizon: int | None,
+    timesteps: int,
+) -> int:
+    import numpy as np
+
+    from world_model.core import delta_from_row, target_scales_from_meta
+    from world_model.predict import (
+        history_to_transition_rows,
+        load_world_model,
+        require_grounded_rollout,
+    )
+
+    horizon = wm_horizon if wm_horizon is not None else min(15, timesteps)
+
+    try:
+        block = require_grounded_rollout(
+            history,
+            drug_name=drug,
+            artifacts_dir=wm_artifacts,
+            horizon=horizon,
+        )
+        loaded = load_world_model(wm_artifacts)
+    except FileNotFoundError as e:
+        print(f"\n{e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"\nGrounded world-model rollout failed: {e}", file=sys.stderr)
+        return 1
+
+    artifacts = block["artifacts_dir"]
+    print("\n--- Grounded world model (simulator = ground truth) ---")
+    print(f"  Artifacts: {artifacts}")
+    print(f"  Horizon:   {horizon}")
+
+    clinical = block.get("clinical_compare", {})
+    if clinical.get("status") == "too_short":
+        print("  Grounding skipped: history too short for comparison.", file=sys.stderr)
+        return 0
+
+    print("\n  World model vs simulator at horizon:")
+    print(f"    Response error:     {clinical.get('final_response_error', 0):.4f}")
+    print(f"    AE severity error:  {clinical.get('final_ae_severity_error', 0):.4f}")
+    print(f"    Toxicity EMA error: {clinical.get('final_toxicity_ema_error', 0):.4f}")
+    print(f"    Drug active match:  {clinical.get('drug_active_match')}")
+    print(f"    WM prediction:      {clinical.get('wm')}")
+    print(f"    Simulator (truth):  {clinical.get('simulator')}")
+
+    rows = history_to_transition_rows(history, drug_name=drug)
+    if rows:
+        row = rows[min(5, len(rows) - 1)]
+        scales = target_scales_from_meta(loaded.meta, loaded.target_cols)
+        row_str = {k: str(v) for k, v in row.items()}
+        pred = loaded.predict_delta_row(row, state_override=None)
+        truth = delta_from_row(row_str, loaded.target_cols)
+        stable = set(loaded.meta.get("metrics_exclude_targets") or [])
+        mask = np.array([c not in stable for c in loaded.target_cols], dtype=bool)
+        per_dim = np.abs(pred - truth) / scales
+        err_all = float(np.mean(per_dim))
+        err_stable = float(np.mean(per_dim[mask])) if np.any(mask) else err_all
+        print(f"  One-step norm MAE vs simulator (stable): {err_stable:.4f}")
+        if stable:
+            print(f"  Excluded from stable metric: {sorted(stable)}")
     return 0
 
 

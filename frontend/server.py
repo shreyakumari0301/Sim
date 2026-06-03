@@ -33,84 +33,39 @@ def _ensure_clinical_path() -> None:
         sys.path.insert(0, str(CLINICAL))
 
 
-def _transition_feature_row(
-    *,
-    s0,
-    s1,
-    drug_name: str,
-    run_id: str,
-    timestep: int,
-) -> dict[str, float | int | str]:
-    from world_model.adapter import infer_action, patient_context, state_to_vector
-    from world_model.drug_rules import drug_id_for_name
-
-    st = state_to_vector(s0)
-    st1 = state_to_vector(s1)
-    act = infer_action(s0, s1)
-    ctx = patient_context(s0)
-    row: dict[str, float | int | str] = {
-        "run_id": run_id,
-        "drug_name": drug_name,
-        "drug_id": drug_id_for_name(drug_name),
-        "timestep": timestep,
-        "age": ctx["age"],
-        "renal_function": ctx["renal_function"],
-        "hepatic_function": ctx["hepatic_function"],
-        "cyp450_metaboliser_id": ctx["cyp450_metaboliser_id"],
-    }
-    for k, v in st.__dict__.items():
-        row[f"s_{k}"] = float(v)
-    for k, v in act.__dict__.items():
-        row[f"a_{k}"] = float(v)
-    for k, v in st1.__dict__.items():
-        row[f"y_{k}"] = float(v)
-    return row
-
-
-def _maybe_world_model_block(
+def _grounded_world_model_block(
     *,
     history: list,
     drug: str,
-    feature_cols: list[str],
-    target_cols: list[str],
-    model,
+    artifacts_dir: Path,
+    horizon: int = 15,
 ) -> dict:
+    from world_model.predict import require_grounded_rollout
+
     if len(history) < 2:
-        return {"status": "too_short", "detail": "Need at least two states for one-step compare."}
-    t = min(5, len(history) - 2)
-    s0, s1 = history[t], history[t + 1]
-    row = _transition_feature_row(
-        s0=s0,
-        s1=s1,
-        drug_name=drug,
-        run_id="dashboard",
-        timestep=t,
-    )
+        return {"status": "too_short", "detail": "Need at least two states for WM compare."}
+
+    h = min(horizon, len(history) - 1)
     try:
-        x = [[float(row[c]) for c in feature_cols]]
-    except KeyError as e:
-        return {
-            "status": "feature_mismatch",
-            "detail": f"Row missing column expected by trained model: {e}",
-        }
-    pred = model.predict(x)[0]
-    pred_map = {target_cols[i]: float(pred[i]) for i in range(len(target_cols))}
-    actual_map = {c: float(row[c]) for c in target_cols if c in row}
-    err = None
-    if actual_map:
-        diffs = {k: pred_map[k] - actual_map[k] for k in target_cols if k in actual_map}
-        err = {
-            "mae_selected": sum(abs(v) for v in diffs.values()) / max(len(diffs), 1),
-            "per_feature_abs": {k: abs(v) for k, v in list(diffs.items())[:12]},
-        }
+        block = require_grounded_rollout(
+            history,
+            drug_name=drug,
+            artifacts_dir=artifacts_dir,
+            horizon=h,
+        )
+    except FileNotFoundError as e:
+        return {"status": "no_artifact", "detail": str(e)}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+    clinical = block.get("clinical_compare", {})
     return {
         "status": "ok",
-        "timestep": t,
-        "state_vector_t": {k: row[k] for k in row if k.startswith("s_")},
-        "action_vector": {k: row[k] for k in row if k.startswith("a_")},
-        "predicted_next_features": pred_map,
-        "simulator_next_features": actual_map,
-        "error_vs_simulator": err,
+        "ground_truth": "simulator",
+        "horizon": h,
+        "clinical_compare": clinical,
+        "artifacts_dir": block.get("artifacts_dir"),
+        "wm_trajectory_steps": block.get("wm_trajectory_steps"),
     }
 
 
@@ -242,39 +197,16 @@ def _run_payload(body: dict) -> dict:
         )
 
     artifacts_dir = CLINICAL / "world_model" / "artifacts"
-    meta_path = artifacts_dir / "world_model_meta.json"
-    model_path = artifacts_dir / "world_model_rf.joblib"
-    alt_pkl = artifacts_dir / "world_model_rf.pkl"
-    wm_block: dict = {"artifacts_dir": str(artifacts_dir)}
-    if not meta_path.is_file():
-        wm_block["status"] = "no_artifact"
-        wm_block["detail"] = "Train a model (see CLINICAL_SIM_COMMANDS.md) to enable RF predictions."
-    else:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        feature_cols = meta.get("feature_cols") or []
-        target_cols = meta.get("target_cols") or []
-        path = model_path if model_path.is_file() else alt_pkl
-        if not path.is_file():
-            wm_block["status"] = "no_model_file"
-            wm_block["detail"] = f"Missing {model_path.name} / {alt_pkl.name}"
-        else:
-            try:
-                import joblib
-
-                model = joblib.load(path)
-            except Exception:
-                import pickle
-
-                model = pickle.loads(path.read_bytes())
-            wm_block.update(
-                _maybe_world_model_block(
-                    history=history,
-                    drug=drug,
-                    feature_cols=feature_cols,
-                    target_cols=target_cols,
-                    model=model,
-                )
-            )
+    wm_horizon = max(3, min(60, int(body.get("wm_horizon") or 15)))
+    wm_block: dict = {"artifacts_dir": str(artifacts_dir), "wm_horizon": wm_horizon}
+    wm_block.update(
+        _grounded_world_model_block(
+            history=history,
+            drug=drug,
+            artifacts_dir=artifacts_dir,
+            horizon=wm_horizon,
+        )
+    )
 
     return {
         "llm": llm_block,

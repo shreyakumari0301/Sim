@@ -59,12 +59,18 @@ def test_train_and_eval_smoke(tmp_path: Path) -> None:
     assert "test_normalized_mae_mean" in meta
     assert (model_dir / "world_model_meta.json").is_file()
 
-    from world_model.eval_rollout import evaluate
+    from world_model.eval_compare import evaluate_rf
 
-    ev = evaluate(csv_path=csv_path, model_dir=model_dir, max_horizon=5)
+    ev = evaluate_rf(csv_path=csv_path, model_dir=model_dir, max_horizon=5)
     assert "one_step_mean_mae" in ev
     assert "one_step_normalized_mae" in ev
     assert ev["n_runs_evaluated"] >= 1
 
     raw = json.loads((model_dir / "world_model_meta.json").read_text(encoding="utf-8"))
     assert raw["n_train"] > 0
+
+    from world_model.eval_compare import compare_all
+
+    report = compare_all(csv_path=csv_path, model_dir=model_dir, max_horizon=5, seed=7)
+    assert "B3_random_forest" in report["models"]
+    assert "B0_persistence" in report["models"]

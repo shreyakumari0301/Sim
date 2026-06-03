@@ -120,6 +120,14 @@ def main() -> None:
 
     drug = st.text_input("Drug (fixed for A and B)", value="metformin").strip()
     timesteps = st.number_input("Timesteps", min_value=7, max_value=365, value=90, step=1)
+    wm_horizon = st.number_input(
+        "Grounded WM rollout horizon",
+        min_value=3,
+        max_value=90,
+        value=min(15, 90),
+        step=1,
+        help="World model predictions compared to simulator at this horizon.",
+    )
 
     with st.expander("Data sources", expanded=False):
         openfda_csv = st.text_input("OpenFDA CSV", value=str(_default_processed("openfda_v1.csv")))
@@ -213,6 +221,69 @@ def main() -> None:
                 {"metric": "drug_active", "scenario_a": out_a["drug_active"], "scenario_b": out_b["drug_active"]},
             ]
         )
+
+        st.subheader("Grounded world model vs simulator")
+        artifacts = CLINICAL_SIM_DIR / "world_model" / "artifacts"
+        try:
+            from world_model.predict import grounded_rollout_from_history, require_grounded_rollout
+            from loop import run_simulation
+
+            h = int(wm_horizon)
+
+            def _hist_for_scenario(**kwargs):
+                st0 = _build_initial_state(horizon=int(timesteps), **kwargs)
+                return run_simulation(
+                    initial_state=st0,
+                    rule_tables=rules.to_dict(),
+                    n_timesteps=int(timesteps),
+                    verbose=False,
+                )
+
+            hist_a = _hist_for_scenario(
+                age=int(age_a),
+                weight=float(weight_a),
+                renal_function=float(renal_a),
+                metaboliser=metab_a,
+                initial_dose=float(dose_a),
+            )
+            hist_b = _hist_for_scenario(
+                age=int(age_b),
+                weight=float(weight_b),
+                renal_function=float(renal_b),
+                metaboliser=metab_b,
+                initial_dose=float(dose_b),
+            )
+            require_grounded_rollout(artifacts_dir=artifacts)
+            cmp_a = grounded_rollout_from_history(
+                hist_a, drug_name=drug, artifacts_dir=artifacts, horizon=h
+            )["clinical_compare"]
+            cmp_b = grounded_rollout_from_history(
+                hist_b, drug_name=drug, artifacts_dir=artifacts, horizon=h
+            )["clinical_compare"]
+            st.caption("Simulator finals are ground truth; errors show WM drift at horizon.")
+            st.table(
+                [
+                    {
+                        "scenario": "A",
+                        "response_err": cmp_a.get("final_response_error"),
+                        "ae_err": cmp_a.get("final_ae_severity_error"),
+                        "drug_active_match": cmp_a.get("drug_active_match"),
+                    },
+                    {
+                        "scenario": "B",
+                        "response_err": cmp_b.get("final_response_error"),
+                        "ae_err": cmp_b.get("final_ae_severity_error"),
+                        "drug_active_match": cmp_b.get("drug_active_match"),
+                    },
+                ]
+            )
+        except FileNotFoundError:
+            st.error(
+                "Trained world model required: clinical_sim/world_model/artifacts. "
+                "Run: python -m world_model.train_baseline --csv <wm_train.csv>"
+            )
+        except Exception as ex:
+            st.error(f"Grounded world-model rollout failed: {ex}")
 
 
 if __name__ == "__main__":

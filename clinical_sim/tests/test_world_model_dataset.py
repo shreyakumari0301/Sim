@@ -1,6 +1,5 @@
-from world_model.adapter import infer_action, state_to_vector
-from world_model.dataset import build_transition_dataset, transitions_to_rows
-from world_model.drug_rules import drug_id_for_name
+from world_model.core import infer_action, state_to_vector
+from world_model.data import build_transition_dataset, drug_id_for_name, transitions_to_rows
 
 
 def test_drug_id_for_name_stable_and_distinct() -> None:

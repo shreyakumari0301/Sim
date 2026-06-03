@@ -1,6 +1,8 @@
 # Clinical simulation & world model — command reference
 
-Run these from the **repository root** unless noted. For modules under `clinical_sim/`, set `PYTHONPATH=clinical_sim` or run from the `clinical_sim/` directory as indicated.
+Run from **repository root** unless noted. For `clinical_sim/` modules: `PYTHONPATH=clinical_sim` or `cd clinical_sim`.
+
+See `clinical_sim/world_model/README.md` for world-model layout.
 
 ---
 
@@ -12,8 +14,6 @@ source .venv/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 ```
 
-`scikit-learn` is included in `[dev]` for world-model training.
-
 ---
 
 ## 2. Tests
@@ -24,113 +24,65 @@ python -m pytest clinical_sim/tests -q
 
 ---
 
-## 3. Main simulator (`clinical_sim/main.py`)
+## 3. Main simulator (grounded world model required)
 
-From repo root:
+Single-patient runs **always** print WM vs simulator at horizon. Train artifacts first (`world_model/artifacts/`).
 
 ```bash
-PYTHONPATH=clinical_sim python clinical_sim/main.py --drug ibuprofen
-PYTHONPATH=clinical_sim python clinical_sim/main.py --drug metformin --cohort-size 50 --cohort-seed 7
-PYTHONPATH=clinical_sim python clinical_sim/main.py --drug silicea --allow-dry-run
+PYTHONPATH=clinical_sim python clinical_sim/main.py --drug metformin --allow-dry-run
+PYTHONPATH=clinical_sim python clinical_sim/main.py --drug ibuprofen --wm-horizon 20
+PYTHONPATH=clinical_sim python clinical_sim/main.py --drug metformin --cohort-size 50
 ```
+
+Cohort mode: simulator summary only (WM is single-patient).
 
 ---
 
-## 4. LLM context (optional)
+## 4. LLM context
 
 ```bash
 export LLM_PUBMED_CHARS=2000
 export LLM_OPENFDA_CHARS=2000
 export LLM_DRUGBANK_CHARS=3000
-export LLM_MAX_NULL_FIELDS=10
-export LLM_PROFILE_FALLBACK_NULL_FIELDS=10
-```
-
-Debug weak extraction (not for inference):
-
-```bash
-PYTHONPATH=clinical_sim python clinical_sim/main.py --drug metformin --allow-weak-extraction
 ```
 
 ---
 
-## 5. World model — quick demo (one drug, printed rows)
+## 5. World model — dataset, train, eval
 
 From `clinical_sim/`:
 
 ```bash
 cd clinical_sim
-python -m world_model.run_demo --drug metformin --timesteps 10 --print-rows 2
-python -m world_model.run_demo --drug metformin --timesteps 10 --save-csv
+python3 -m world_model.generate_dataset --drugs metformin,ibuprofen,amoxicillin --runs-per-drug 30 --timesteps 40 --base-seed 42 --out ../data/processed/wm_train.csv
+python3 -m world_model.generate_dataset --drugs metformin,ibuprofen,amoxicillin --runs-per-drug 10 --timesteps 40 --base-seed 999 --out ../data/processed/wm_eval.csv
+python3 -m world_model.train_baseline --csv ../data/processed/wm_train.csv --out-dir world_model/artifacts
+python3 -m world_model.eval_compare --csv ../data/processed/wm_eval.csv --model-dir world_model/artifacts --horizon 15
+python3 -m world_model.eval_compare --ladder --csv ../data/processed/wm_eval.csv --horizon 15
 ```
 
-Same baseline rules for all drugs (debug):
+Artifacts: `world_model/artifacts/world_model_rf.joblib`, `world_model_meta.json`.
 
-```bash
-python -m world_model.run_demo --drug metformin --use-default-rules --print-rows 1
-```
+**Primary metric:** stable normalized MAE (`metrics_exclude_targets` in meta).
 
 ---
 
-## 6. World model — scaled dataset (CSV)
-
-From `clinical_sim/`:
+## 6. UI
 
 ```bash
-cd clinical_sim
-python -m world_model.generate_dataset --drugs metformin,amoxicillin,ibuprofen --runs-per-drug 20 --timesteps 40 --out ../data/processed/wm_transitions.csv
+PYTHONPATH=clinical_sim streamlit run streamlit_app.py
+python frontend/server.py
 ```
 
-Custom seed and dose:
-
-```bash
-python -m world_model.generate_dataset --drugs metformin --runs-per-drug 50 --timesteps 60 --base-seed 42 --dose 200 --out ../data/processed/wm_metformin.csv
-```
+Both require trained WM artifacts and show grounded WM vs simulator.
 
 ---
 
-## 7. World model — train baseline (Random Forest)
-
-From `clinical_sim/` (after generating a CSV):
+## 7. One-liner smoke pipeline
 
 ```bash
 cd clinical_sim
-python -m world_model.train_baseline --csv ../data/processed/wm_transitions.csv --out-dir world_model/artifacts
-```
-
-With options:
-
-```bash
-python -m world_model.train_baseline --csv ../data/processed/wm_transitions.csv --out-dir world_model/artifacts --n-estimators 120 --max-depth 16 --test-fraction 0.2 --seed 42
-```
-
-Artifacts written:
-
-- `world_model/artifacts/world_model_rf.joblib` (or `.pkl` if `joblib` unavailable)
-- `world_model/artifacts/world_model_meta.json`
-
----
-
-## 8. World model — evaluate rollout
-
-Uses the same CSV and trained `artifacts/` directory:
-
-```bash
-cd clinical_sim
-python -m world_model.eval_rollout --csv ../data/processed/wm_transitions.csv --model-dir world_model/artifacts --horizon 15
-```
-
-**Note:** one-step MAE on the **full** CSV is optimistic if that CSV was used for training; for honest metrics, evaluate on a **held-out** CSV generated with a different `--base-seed` or held-out drugs.
-
----
-
-## 9. One-liner: tiny pipeline (generate → train → eval)
-
-From `clinical_sim/`:
-
-```bash
-cd clinical_sim
-python -m world_model.generate_dataset --drugs metformin,ibuprofen --runs-per-drug 8 --timesteps 25 --out ../data/processed/wm_small.csv
-python -m world_model.train_baseline --csv ../data/processed/wm_small.csv --out-dir world_model/artifacts --n-estimators 40 --max-depth 12
-python -m world_model.eval_rollout --csv ../data/processed/wm_small.csv --model-dir world_model/artifacts --horizon 10
+python3 -m world_model.generate_dataset --drugs metformin,ibuprofen --runs-per-drug 8 --timesteps 25 --out ../data/processed/wm_small.csv
+python3 -m world_model.train_baseline --csv ../data/processed/wm_small.csv --out-dir world_model/artifacts --n-estimators 40 --max-depth 12
+python3 -m world_model.eval_compare --csv ../data/processed/wm_small.csv --model-dir world_model/artifacts --horizon 10 --ladder
 ```
